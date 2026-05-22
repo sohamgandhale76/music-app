@@ -1,0 +1,8 @@
+{
+  "ignore": [
+    "data",
+    "data/**/*",
+    "uploads",
+    "uploads/**/*"
+  ]
+}

@@ -281,7 +281,22 @@ app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:
   if (range) {
     const parts = range.replace(/bytes=/, "").split("-");
     const start = parseInt(parts[0], 10) || 0;
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    let end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+
+    // For Telegram tracks, limit the range size in each HTTP 206 response to at most 2 chunks.
+    // This prevents downloading the entire file in parallel from Telegram CDN,
+    // resolving playback freezes, slow response times, and socket timeouts for guests.
+    if (track.source === 'telegram' && !isDownload) {
+      const totalChunks = track.fileIds ? track.fileIds.length : 1;
+      const bytesPerChunk = Math.ceil(fileSize / totalChunks);
+      const maxRangeSize = Math.max(512 * 1024, bytesPerChunk * 2); // at least 512KB or 2 chunks
+      if (end - start + 1 > maxRangeSize) {
+        end = start + maxRangeSize - 1;
+      }
+      if (end >= fileSize) {
+        end = fileSize - 1;
+      }
+    }
 
     if (start >= fileSize || end >= fileSize || start > end) {
       res.status(416).setHeader('Content-Range', `bytes */${fileSize}`);
