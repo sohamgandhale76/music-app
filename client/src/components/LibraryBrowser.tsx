@@ -54,7 +54,7 @@ export interface UploadTask {
   name: string;
   size: number;
   progress: number;
-  status: 'queued' | 'uploading' | 'completed' | 'failed';
+  status: 'queued' | 'uploading' | 'processing' | 'completed' | 'failed';
   error?: string;
 }
 
@@ -135,7 +135,7 @@ export function LibraryBrowser({
   // Concurrent Upload Queue Runner (Max 2 uploads)
   useEffect(() => {
     const activeCount = uploadTasks.filter(
-      (t) => t.status === 'uploading' || runningUploadsRef.current.has(t.id)
+      (t) => (t.status === 'uploading' || t.status === 'processing') || runningUploadsRef.current.has(t.id)
     ).length;
     if (activeCount >= 2) return;
 
@@ -168,14 +168,37 @@ export function LibraryBrowser({
 
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${SERVER_URL || ''}/api/library/upload`);
+    // 10 minute timeout: large FLAC files + Telegram chunking can take a while
+    xhr.timeout = 10 * 60 * 1000;
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
         const pct = Math.round((event.loaded / event.total) * 100);
-        setUploadTasks((prev) =>
-          prev.map((t) => (t.id === taskId ? { ...t, progress: pct } : t))
-        );
+        // Once file bytes are fully sent to server, switch to 'processing'
+        // because server still needs to chunk-upload to Telegram
+        if (pct >= 100) {
+          setUploadTasks((prev) =>
+            prev.map((t) =>
+              t.id === taskId ? { ...t, progress: 100, status: 'processing' } : t
+            )
+          );
+        } else {
+          setUploadTasks((prev) =>
+            prev.map((t) => (t.id === taskId ? { ...t, progress: pct } : t))
+          );
+        }
       }
+    };
+
+    xhr.ontimeout = () => {
+      runningUploadsRef.current.delete(taskId);
+      setUploadTasks((prev) =>
+        prev.map((t) =>
+          t.id === taskId
+            ? { ...t, status: 'failed', error: 'Upload timed out — file may be too large or connection too slow' }
+            : t
+        )
+      );
     };
 
     xhr.onload = async () => {
@@ -393,7 +416,7 @@ export function LibraryBrowser({
   };
 
   const clearUploadPanel = () => {
-    setUploadTasks((prev) => prev.filter((t) => t.status === 'queued' || t.status === 'uploading'));
+    setUploadTasks((prev) => prev.filter((t) => t.status === 'queued' || t.status === 'uploading' || t.status === 'processing'));
   };
 
   const filteredTracks = tracks.filter((t) => {
@@ -477,7 +500,7 @@ export function LibraryBrowser({
   const selectedAlbumData = selectedAlbum ? albumsMap.get(selectedAlbum) : null;
   const selectedGenreData = selectedGenre ? genresMap.get(selectedGenre) : null;
 
-  const totalUploadingCount = uploadTasks.filter((t) => t.status === 'uploading' || t.status === 'queued').length;
+  const totalUploadingCount = uploadTasks.filter((t) => t.status === 'uploading' || t.status === 'queued' || t.status === 'processing').length;
 
   return (
     <div
@@ -1041,15 +1064,24 @@ export function LibraryBrowser({
                             ? 'text-green-400'
                             : task.status === 'failed'
                             ? 'text-red-400'
+                            : task.status === 'processing'
+                            ? 'text-sky-400 animate-pulse'
                             : 'text-accent-gold'
                         }`}
                       >
                         {task.status === 'completed' && '✓'}
                         {task.status === 'failed' && '✕'}
                         {task.status === 'uploading' && `${task.progress}%`}
+                        {task.status === 'processing' && '☁ cloud...'}
                         {task.status === 'queued' && 'queued'}
                       </span>
                     </div>
+
+                    {task.status === 'processing' && (
+                      <p className="text-[9px] font-mono text-sky-400/80 animate-pulse leading-normal">
+                        Uploading to cloud storage — please wait, do not close this tab…
+                      </p>
+                    )}
 
                     <div className="flex items-center gap-2">
                       <div className="flex-1">
@@ -1060,6 +1092,8 @@ export function LibraryBrowser({
                               ? 'bg-green-500/20'
                               : task.status === 'failed'
                               ? 'bg-red-500/20'
+                              : task.status === 'processing'
+                              ? 'bg-sky-500/20'
                               : ''
                           }
                         />
