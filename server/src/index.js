@@ -153,35 +153,67 @@ app.post(
 // Temporary folder for library uploads
 const tempUpload = multer({ dest: path.join(__dirname, '../uploads/temp') });
 
-// Upload to library (High-Quality validation)
+// ─── In-memory upload job tracker ────────────────────────────────────────
+const uploadJobs = new Map(); // jobId -> { status, track, error, filename, originalname, mimetype, size }
+
+// Upload to library – returns a jobId immediately, processes in background
+// This avoids Render's 30-second HTTP request timeout for large Telegram uploads
 app.post(
   '/api/library/upload',
   apiLimiter,
   uploadLimiter,
   tempUpload.single('file'),
-  async (req, res) => {
+  (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No audio file uploaded.' });
     }
 
-    try {
-      const track = await libraryManager.addTrack(
-        req.file.path,
-        req.file.originalname,
-        req.file.mimetype,
-        req.file.size
-      );
-      res.json({ ok: true, track });
-    } catch (err) {
-      // clean up temp file if error
-      if (req.file && req.file.path && fs.existsSync(req.file.path)) {
-        try { fs.unlinkSync(req.file.path); } catch (e) {}
+    const jobId = require('crypto').randomBytes(12).toString('hex');
+    uploadJobs.set(jobId, {
+      status: 'processing',
+      track: null,
+      error: null,
+    });
+
+    // Respond immediately with jobId so the HTTP connection closes
+    res.json({ ok: true, jobId });
+
+    // Process the upload asynchronously in the background
+    (async () => {
+      try {
+        const track = await libraryManager.addTrack(
+          req.file.path,
+          req.file.originalname,
+          req.file.mimetype,
+          req.file.size
+        );
+        uploadJobs.set(jobId, { status: 'done', track, error: null });
+        logger.info('Background upload job completed', { jobId, trackId: track.id });
+      } catch (err) {
+        // clean up temp file on error
+        if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+          try { fs.unlinkSync(req.file.path); } catch (e) {}
+        }
+        logger.warn('Background upload job failed', { jobId, filename: req.file.originalname, error: err.message });
+        uploadJobs.set(jobId, { status: 'failed', track: null, error: err.message });
+      } finally {
+        // Clean up job record after 10 minutes
+        setTimeout(() => uploadJobs.delete(jobId), 10 * 60 * 1000);
       }
-      logger.warn('Library upload rejected', { filename: req.file.originalname, error: err.message });
-      res.status(400).json({ error: err.message });
-    }
+    })();
   }
 );
+
+// Poll upload job status
+app.get('/api/library/jobs/:jobId', apiLimiter, (req, res) => {
+  const { jobId } = req.params;
+  const job = uploadJobs.get(jobId);
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found or expired' });
+  }
+  res.json(job);
+});
+
 
 // Get all library tracks
 app.get('/api/library/tracks', apiLimiter, (_req, res) => {

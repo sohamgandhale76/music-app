@@ -158,6 +158,8 @@ export function LibraryBrowser({
       return;
     }
 
+    // Run async upload in a fire-and-forget IIFE
+    (async () => {
     // Set task to uploading
     setUploadTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, status: 'uploading' } : t))
@@ -166,51 +168,23 @@ export function LibraryBrowser({
     const formData = new FormData();
     formData.append('file', file);
 
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${SERVER_URL || ''}/api/library/upload`);
-    // 10 minute timeout: large FLAC files + Telegram chunking can take a while
-    xhr.timeout = 10 * 60 * 1000;
+    // Step 1: POST the file — server responds immediately with jobId
+    // (avoids Render's 30s HTTP timeout; Telegram chunking happens in background)
+    let jobId: string | null = null;
+    try {
+      const uploadRes = await fetch(`${SERVER_URL || ''}/api/library/upload`, {
+        method: 'POST',
+        body: formData,
+      });
+      const uploadData = await uploadRes.json();
 
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const pct = Math.round((event.loaded / event.total) * 100);
-        // Once file bytes are fully sent to server, switch to 'processing'
-        // because server still needs to chunk-upload to Telegram
-        if (pct >= 100) {
-          setUploadTasks((prev) =>
-            prev.map((t) =>
-              t.id === taskId ? { ...t, progress: 100, status: 'processing' } : t
-            )
-          );
-        } else {
-          setUploadTasks((prev) =>
-            prev.map((t) => (t.id === taskId ? { ...t, progress: pct } : t))
-          );
-        }
+      if (!uploadRes.ok) {
+        throw new Error(uploadData.error || 'Upload failed');
       }
-    };
 
-    xhr.ontimeout = () => {
-      runningUploadsRef.current.delete(taskId);
-      setUploadTasks((prev) =>
-        prev.map((t) =>
-          t.id === taskId
-            ? { ...t, status: 'failed', error: 'Upload timed out — file may be too large or connection too slow' }
-            : t
-        )
-      );
-    };
-
-    xhr.onload = async () => {
-      runningUploadsRef.current.delete(taskId);
-      if (xhr.status >= 200 && xhr.status < 300) {
-        let trackId = '';
-        try {
-          const res = JSON.parse(xhr.responseText);
-          trackId = res.track?.id;
-        } catch {}
-
-        // Auto-associate lyrics if matching LRC dropped
+      // If server returned a track directly (legacy / local-only mode)
+      if (uploadData.track) {
+        const trackId = uploadData.track.id;
         const lrcFile = lrcFilesMapRef.current.get(taskId);
         if (lrcFile && trackId) {
           try {
@@ -226,35 +200,86 @@ export function LibraryBrowser({
             lrcFilesMapRef.current.delete(taskId);
           }
         }
-
+        runningUploadsRef.current.delete(taskId);
         setUploadTasks((prev) =>
-          prev.map((t) =>
-            t.id === taskId ? { ...t, status: 'completed', progress: 100 } : t
-          )
+          prev.map((t) => t.id === taskId ? { ...t, status: 'completed', progress: 100 } : t)
         );
         fetchTracks();
-      } else {
-        let errMsg = 'Upload failed';
-        try {
-          const res = JSON.parse(xhr.responseText);
-          errMsg = res.error || errMsg;
-        } catch {}
-        setUploadTasks((prev) =>
-          prev.map((t) => (t.id === taskId ? { ...t, status: 'failed', error: errMsg } : t))
-        );
+        return;
       }
-    };
 
-    xhr.onerror = () => {
+      jobId = uploadData.jobId;
+    } catch (err: any) {
       runningUploadsRef.current.delete(taskId);
       setUploadTasks((prev) =>
-        prev.map((t) =>
-          t.id === taskId ? { ...t, status: 'failed', error: 'Network error' } : t
-        )
+        prev.map((t) => t.id === taskId ? { ...t, status: 'failed', error: err.message || 'Upload failed' } : t)
+      );
+      return;
+    }
+
+    // Step 2: Switch to 'processing' and poll until the background job finishes
+    setUploadTasks((prev) =>
+      prev.map((t) => t.id === taskId ? { ...t, progress: 100, status: 'processing' } : t)
+    );
+
+    const poll = async () => {
+      const MAX_WAIT_MS = 15 * 60 * 1000; // 15 min max
+      const POLL_INTERVAL = 3000;
+      const started = Date.now();
+
+      while (Date.now() - started < MAX_WAIT_MS) {
+        await new Promise(r => setTimeout(r, POLL_INTERVAL));
+        try {
+          const jobRes = await fetch(`${SERVER_URL || ''}/api/library/jobs/${jobId}`);
+          const job = await jobRes.json();
+
+          if (job.status === 'done') {
+            const trackId = job.track?.id;
+            const lrcFile = lrcFilesMapRef.current.get(taskId);
+            if (lrcFile && trackId) {
+              try {
+                const text = await lrcFile.text();
+                await fetch(`${SERVER_URL || ''}/api/library/tracks/${trackId}/lrc`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ lrcText: text }),
+                });
+              } catch (lrcErr) {
+                console.error('Failed to auto-associate lyrics:', lrcErr);
+              } finally {
+                lrcFilesMapRef.current.delete(taskId);
+              }
+            }
+            runningUploadsRef.current.delete(taskId);
+            setUploadTasks((prev) =>
+              prev.map((t) => t.id === taskId ? { ...t, status: 'completed', progress: 100 } : t)
+            );
+            fetchTracks();
+            return;
+          }
+
+          if (job.status === 'failed') {
+            runningUploadsRef.current.delete(taskId);
+            setUploadTasks((prev) =>
+              prev.map((t) => t.id === taskId ? { ...t, status: 'failed', error: job.error || 'Upload failed on server' } : t)
+            );
+            return;
+          }
+          // still 'processing' — keep polling
+        } catch {
+          // network hiccup — keep trying
+        }
+      }
+
+      // Timed out waiting
+      runningUploadsRef.current.delete(taskId);
+      setUploadTasks((prev) =>
+        prev.map((t) => t.id === taskId ? { ...t, status: 'failed', error: 'Timed out waiting for cloud upload to complete' } : t)
       );
     };
 
-    xhr.send(formData);
+    poll();
+    })();
   }, [uploadTasks, fetchTracks]);
 
   const addFilesToQueue = useCallback((allFiles: File[]) => {
