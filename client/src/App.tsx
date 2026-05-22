@@ -1,0 +1,75 @@
+import { useState } from 'react';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { RoomLobby }     from './components/RoomLobby';
+import { HostView }      from './components/HostView';
+import { ViewerView }    from './components/ViewerView';
+import { useNtpSync }    from './hooks/useNtpSync';
+import { Spinner }       from './components/ui/Spinner';
+
+type Role = 'host' | 'viewer' | null;
+
+interface Session {
+  role: Role;
+  roomId: string;
+  displayName: string;
+}
+
+export default function App() {
+  const { synced } = useNtpSync();
+
+  const [session, setSession] = useState<Session>({
+    role: null,
+    roomId: '',
+    displayName: '',
+  });
+
+  const handleJoin = (role: 'host' | 'viewer', roomId: string, displayName: string) => {
+    setSession({ role, roomId, displayName });
+    // Update URL for shareable state (viewer link)
+    if (role === 'viewer') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('room', roomId);
+      window.history.replaceState({}, '', url.toString());
+    }
+  };
+
+  // ── NTP clock sync loading screen ─────────────────────────────────────
+  if (!synced) {
+    return (
+      <div className="min-h-screen bg-noir-black flex flex-col items-center justify-center gap-6">
+        <Spinner size="lg" />
+        <div className="text-center space-y-2">
+          <p className="font-mono text-xs text-noir-ash tracking-[0.3em] uppercase animate-pulse">
+            Synchronizing Clock
+          </p>
+          <p className="font-mono text-[10px] text-noir-dim/60">
+            calibrating NTP offset…
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Warn if NTP sync had an error but still let the user proceed
+  // (offset defaults to 0, so sync is best-effort)
+
+  return (
+    <ErrorBoundary>
+      {!session.role && (
+        <RoomLobby onJoin={handleJoin} />
+      )}
+
+      {session.role === 'host' && (
+        <ErrorBoundary>
+          <HostView roomId={session.roomId} displayName={session.displayName} />
+        </ErrorBoundary>
+      )}
+
+      {session.role === 'viewer' && (
+        <ErrorBoundary>
+          <ViewerView roomId={session.roomId} displayName={session.displayName} />
+        </ErrorBoundary>
+      )}
+    </ErrorBoundary>
+  );
+}
