@@ -375,9 +375,9 @@ export function LibraryBrowser({
   const filteredTracks = tracks.filter((t) => {
     const term = searchQuery.toLowerCase();
     return (
-      t.title.toLowerCase().includes(term) ||
-      t.artist.toLowerCase().includes(term) ||
-      t.album.toLowerCase().includes(term)
+      (t.title || '').toLowerCase().includes(term) ||
+      (t.artist || '').toLowerCase().includes(term) ||
+      (t.album || '').toLowerCase().includes(term)
     );
   });
 
@@ -410,7 +410,10 @@ export function LibraryBrowser({
   }).filter((a) => {
     if (!searchQuery) return true;
     const term = searchQuery.toLowerCase();
-    return a.name.toLowerCase().includes(term) || a.artist.toLowerCase().includes(term);
+    return (
+      (a.name || '').toLowerCase().includes(term) ||
+      (a.artist || '').toLowerCase().includes(term)
+    );
   });
 
   const genresMap = new Map<string, LibraryTrack[]>();
@@ -432,7 +435,7 @@ export function LibraryBrowser({
     };
   }).filter((g) => {
     if (!searchQuery) return true;
-    return g.name.toLowerCase().includes(searchQuery.toLowerCase());
+    return (g.name || '').toLowerCase().includes(searchQuery.toLowerCase());
   });
 
   const handleHostTrackListAction = (trackList: LibraryTrack[]) => {
