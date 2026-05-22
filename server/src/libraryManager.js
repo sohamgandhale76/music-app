@@ -37,6 +37,22 @@ class LibraryManager {
     this.loadCatalog();
   }
 
+  async syncCatalogFromTelegram() {
+    if (!telegramBot.isEnabled()) return;
+    try {
+      const buffer = await telegramBot.getPinnedCatalog();
+      if (buffer) {
+        fs.writeFileSync(LIBRARY_FILE, buffer);
+        this.tracks = JSON.parse(buffer.toString('utf8'));
+        logger.info('Successfully synced catalog from Telegram cloud', { count: this.tracks.length });
+      } else {
+        logger.info('No pinned catalog found on Telegram, starting with local/empty catalog');
+      }
+    } catch (err) {
+      logger.error('Error syncing catalog from Telegram', { error: err.message });
+    }
+  }
+
   loadCatalog() {
     try {
       if (fs.existsSync(LIBRARY_FILE)) {
@@ -55,7 +71,15 @@ class LibraryManager {
 
   saveCatalog() {
     try {
-      fs.writeFileSync(LIBRARY_FILE, JSON.stringify(this.tracks, null, 2), 'utf8');
+      const data = JSON.stringify(this.tracks, null, 2);
+      fs.writeFileSync(LIBRARY_FILE, data, 'utf8');
+      
+      if (telegramBot.isEnabled()) {
+        const buffer = Buffer.from(data, 'utf8');
+        telegramBot.pinCatalog(buffer).catch((err) => {
+          logger.error('Async Telegram catalog pin failed', { error: err.message });
+        });
+      }
     } catch (err) {
       logger.error('Failed to save library catalog', { error: err.message });
     }

@@ -41,6 +41,14 @@ const maxChunkMB = parseInt(process.env.MAX_CHUNK_SIZE_MB || '10', 10);
 app.use(helmet({
   // Allow cross-origin requests for media (needed for MSE streaming)
   crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      'connect-src': ["'self'", "ws:", "wss:"],
+      'media-src': ["'self'", "blob:", "data:", "https://*"],
+      'img-src': ["'self'", "data:", "blob:", "https://*"],
+    },
+  },
 }));
 
 app.use(cors({
@@ -700,13 +708,28 @@ io.on('connection', (socket) => {
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
-server.listen(PORT, () => {
-  logger.info(`NoirSync server running`, {
-    port: PORT,
-    env: process.env.NODE_ENV || 'development',
-    cors: corsOrigin,
+async function startServer() {
+  // Sync library catalog from Telegram cloud if active
+  try {
+    const telegramBot = require('./telegramBot');
+    if (telegramBot.isEnabled()) {
+      logger.info('Syncing library catalog from Telegram cloud...');
+      await libraryManager.syncCatalogFromTelegram();
+    }
+  } catch (err) {
+    logger.error('Failed to sync catalog from Telegram on startup', { error: err.message });
+  }
+
+  server.listen(PORT, () => {
+    logger.info(`NoirSync server running`, {
+      port: PORT,
+      env: process.env.NODE_ENV || 'development',
+      cors: corsOrigin,
+    });
   });
-});
+}
+
+startServer();
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────
 // Ensures in-flight requests complete and Socket.io closes cleanly.

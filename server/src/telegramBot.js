@@ -186,9 +186,51 @@ function getChunkBuffer(fileId) {
   return promise;
 }
 
+/**
+ * Fetches the pinned catalog content from the Telegram chat
+ * @returns {Promise<Buffer|null>} catalogBuffer
+ */
+async function getPinnedCatalog() {
+  if (!isEnabled) return null;
+  try {
+    const chat = await telegram.getChat(chatId);
+    if (chat.pinned_message && chat.pinned_message.document && chat.pinned_message.document.file_name === 'library.json') {
+      const fileId = chat.pinned_message.document.file_id;
+      return await getChunkBuffer(fileId);
+    }
+  } catch (err) {
+    logger.error('Failed to fetch pinned catalog from Telegram', { error: err.message });
+  }
+  return null;
+}
+
+/**
+ * Uploads the catalog to Telegram and pins it
+ * @param {Buffer} buffer 
+ * @returns {Promise<boolean>} success
+ */
+async function pinCatalog(buffer) {
+  if (!isEnabled) return false;
+  try {
+    const res = await telegram.sendDocument(chatId, { source: buffer, filename: 'library.json' });
+    if (!res.document || !res.document.file_id) {
+      throw new Error('Telegram response did not return a valid document');
+    }
+    const messageId = res.message_id;
+    await telegram.pinChatMessage(chatId, messageId, { disable_notification: true });
+    logger.info('Pinned new catalog on Telegram', { messageId });
+    return true;
+  } catch (err) {
+    logger.error('Failed to pin catalog on Telegram', { error: err.message });
+    return false;
+  }
+}
+
 module.exports = {
   isEnabled: () => isEnabled,
   uploadChunk,
   getChunkUrl,
   getChunkBuffer,
+  getPinnedCatalog,
+  pinCatalog,
 };
