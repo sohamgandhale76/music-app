@@ -98,6 +98,40 @@ if (token) {
 }
 
 /**
+ * Retries an operation with exponential backoff.
+ * Catches transient issues like socket hang up, ECONNRESET, timeouts, and rate limits.
+ */
+async function retryOperation(fn, description = 'operation', maxRetries = 4, initialDelay = 1000) {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      return await fn();
+    } catch (err) {
+      attempt++;
+      const isTransient = 
+        !err.message || 
+        err.message.includes('socket hang up') || 
+        err.message.includes('ECONNRESET') ||
+        err.message.includes('ETIMEDOUT') ||
+        err.message.includes('timeout') ||
+        err.message.includes('429') ||
+        err.code === 'ECONNRESET' ||
+        err.code === 'ETIMEDOUT' ||
+        err.code === 'EPIPE';
+      
+      if (attempt >= maxRetries || !isTransient) {
+        logger.error(`Telegram ${description} failed permanently after ${attempt} attempts`, { error: err.message });
+        throw err;
+      }
+      
+      const delay = initialDelay * Math.pow(2, attempt - 1);
+      logger.warn(`Telegram ${description} failed (Attempt ${attempt}/${maxRetries}): ${err.message}. Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
+
+/**
  * Upload a raw chunk buffer to the configured Telegram chat
  * @param {Buffer} buffer 
  * @param {string} filename 
@@ -107,11 +141,13 @@ async function uploadChunk(buffer, filename) {
   if (!isEnabled) {
     throw new Error('Telegram Bot storage is not enabled.');
   }
-  const res = await telegram.sendDocument(chatId, { source: buffer, filename });
-  if (!res.document || !res.document.file_id) {
-    throw new Error('Telegram response did not return a valid document fileId');
-  }
-  return res.document.file_id;
+  return retryOperation(async () => {
+    const res = await telegram.sendDocument(chatId, { source: buffer, filename });
+    if (!res.document || !res.document.file_id) {
+      throw new Error('Telegram response did not return a valid document fileId');
+    }
+    return res.document.file_id;
+  }, `uploadChunk(${filename})`);
 }
 
 /**
@@ -123,10 +159,13 @@ async function getChunkUrl(fileId) {
   if (!isEnabled) {
     throw new Error('Telegram Bot storage is not enabled.');
   }
-  const fileInfo = await telegram.getFile(fileId);
-  if (!fileInfo || !fileInfo.file_path) {
-    throw new Error('Could not retrieve file path from Telegram');
-  }
+  const fileInfo = await retryOperation(async () => {
+    const info = await telegram.getFile(fileId);
+    if (!info || !info.file_path) {
+      throw new Error('Could not retrieve file path from Telegram');
+    }
+    return info;
+  }, `getFile(${fileId})`);
   return `https://api.telegram.org/file/bot${token}/${fileInfo.file_path}`;
 }
 
@@ -166,21 +205,19 @@ function getChunkBuffer(fileId) {
   }
 
   logger.info(`Telegram Cache MISS. Fetching chunk: ${fileId}`);
-  const promise = (async () => {
-    try {
-      const url = await getChunkUrl(fileId);
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`Telegram CDN returned status ${res.status}`);
-      }
-      const arrayBuffer = await res.arrayBuffer();
-      return Buffer.from(arrayBuffer);
-    } catch (err) {
-      // Evict failed requests so they can be retried later
-      chunkCache.delete(fileId);
-      throw err;
+  const promise = retryOperation(async () => {
+    const url = await getChunkUrl(fileId);
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Telegram CDN returned status ${res.status}`);
     }
-  })();
+    const arrayBuffer = await res.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }, `fetchCDN(${fileId})`).catch((err) => {
+    // Evict failed requests so they can be retried later
+    chunkCache.delete(fileId);
+    throw err;
+  });
 
   setCachedChunk(fileId, promise);
   return promise;
@@ -193,7 +230,9 @@ function getChunkBuffer(fileId) {
 async function getPinnedCatalog() {
   if (!isEnabled) return null;
   try {
-    const chat = await telegram.getChat(chatId);
+    const chat = await retryOperation(async () => {
+      return await telegram.getChat(chatId);
+    }, 'getChat');
     if (chat.pinned_message && chat.pinned_message.document && chat.pinned_message.document.file_name === 'library.json') {
       const fileId = chat.pinned_message.document.file_id;
       return await getChunkBuffer(fileId);
@@ -212,12 +251,17 @@ async function getPinnedCatalog() {
 async function pinCatalog(buffer) {
   if (!isEnabled) return false;
   try {
-    const res = await telegram.sendDocument(chatId, { source: buffer, filename: 'library.json' });
-    if (!res.document || !res.document.file_id) {
-      throw new Error('Telegram response did not return a valid document');
-    }
+    const res = await retryOperation(async () => {
+      const r = await telegram.sendDocument(chatId, { source: buffer, filename: 'library.json' });
+      if (!r.document || !r.document.file_id) {
+        throw new Error('Telegram response did not return a valid document');
+      }
+      return r;
+    }, 'uploadCatalog');
     const messageId = res.message_id;
-    await telegram.pinChatMessage(chatId, messageId, { disable_notification: true });
+    await retryOperation(async () => {
+      await telegram.pinChatMessage(chatId, messageId, { disable_notification: true });
+    }, 'pinChatMessage');
     logger.info('Pinned new catalog on Telegram', { messageId });
     return true;
   } catch (err) {
@@ -234,3 +278,4 @@ module.exports = {
   getPinnedCatalog,
   pinCatalog,
 };
+
