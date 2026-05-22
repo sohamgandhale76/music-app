@@ -136,13 +136,15 @@ class LibraryManager {
       try {
         source = 'telegram';
         const fileBuffer = fs.readFileSync(tempFilePath);
-        
-        const CHUNK_DURATION = 5;
-        const totalChunks = Math.ceil(duration / CHUNK_DURATION) || 1;
+
+        // Use 4MB chunks (Telegram max document size is 50MB but we want fast uploads)
+        // This gives ~10 chunks for a 41MB file instead of 41 chunks with 5s time-based splitting
+        const MAX_CHUNK_BYTES = 4 * 1024 * 1024; // 4MB
+        const totalChunks = Math.ceil(fileBuffer.length / MAX_CHUNK_BYTES);
         const bytesPerChunk = Math.ceil(fileBuffer.length / totalChunks);
         
         fileIds = [];
-        logger.info(`Telegram cloud storage active. Uploading track ${trackId} in ${totalChunks} chunks...`);
+        logger.info(`Telegram cloud storage active. Uploading track ${trackId} in ${totalChunks} chunks (${(bytesPerChunk/1024/1024).toFixed(1)}MB each)...`);
         
         for (let i = 0; i < totalChunks; i++) {
           const start = i * bytesPerChunk;
@@ -151,6 +153,7 @@ class LibraryManager {
           
           const fileId = await telegramBot.uploadChunk(slice, `${trackId}_chunk_${i}.bin`);
           fileIds.push(fileId);
+          logger.info(`  Chunk ${i + 1}/${totalChunks} uploaded (${(slice.length/1024/1024).toFixed(1)}MB)`);
         }
         
         logger.info(`Track successfully uploaded to Telegram: ${trackId}`, { totalChunks });
