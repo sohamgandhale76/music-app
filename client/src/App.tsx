@@ -5,6 +5,7 @@ import { HostView }      from './components/HostView';
 import { ViewerView }    from './components/ViewerView';
 import { useNtpSync }    from './hooks/useNtpSync';
 import { Spinner }       from './components/ui/Spinner';
+import { disconnectSocket } from './lib/socket';
 
 type Role = 'host' | 'viewer' | null;
 
@@ -31,6 +32,15 @@ export default function App() {
       url.searchParams.set('room', roomId);
       window.history.replaceState({}, '', url.toString());
     }
+  };
+
+  const handleLeave = () => {
+    disconnectSocket();
+    setSession({ role: null, roomId: '', displayName: '' });
+    // Clear url query param if present
+    const url = new URL(window.location.href);
+    url.searchParams.delete('room');
+    window.history.replaceState({}, '', url.toString());
   };
 
   // ── NTP clock sync loading screen ─────────────────────────────────────
@@ -61,13 +71,13 @@ export default function App() {
 
       {session.role === 'host' && (
         <ErrorBoundary>
-          <HostView roomId={session.roomId} displayName={session.displayName} />
+          <HostView roomId={session.roomId} displayName={session.displayName} onLeave={handleLeave} />
         </ErrorBoundary>
       )}
 
       {session.role === 'viewer' && (
         <ErrorBoundary>
-          <ViewerView roomId={session.roomId} displayName={session.displayName} />
+          <ViewerView roomId={session.roomId} displayName={session.displayName} onLeave={handleLeave} />
         </ErrorBoundary>
       )}
     </ErrorBoundary>

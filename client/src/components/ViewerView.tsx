@@ -16,10 +16,12 @@ import { SERVER_URL } from '../lib/constants';
 import { LibraryBrowser } from './LibraryBrowser';
 import { Button } from './ui/Button';
 import { getServerTime } from '../lib/ntp';
+import { getSocket } from '../lib/socket';
 
 interface Props {
   roomId: string;
   displayName: string;
+  onLeave: () => void;
 }
 
 const PREFETCH_AHEAD = 4;
@@ -30,9 +32,15 @@ function formatTime(secs: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function ViewerView({ roomId, displayName }: Props) {
+export function ViewerView({ roomId, displayName, onLeave }: Props) {
   const { connected, roomState, roomError } = useRoom(roomId, 'viewer', displayName);
   const toast = useToast();
+
+  const sortedMembers = [...(roomState.members || [])].sort((a, b) => {
+    if (a.role === 'host' && b.role !== 'host') return -1;
+    if (a.role !== 'host' && b.role === 'host') return 1;
+    return (a.displayName || '').localeCompare(b.displayName || '');
+  });
 
   const audioRef         = useRef<HTMLAudioElement>(null);
   const mseRef           = useRef<SourceBufferManager | null>(null);
@@ -342,6 +350,13 @@ export function ViewerView({ roomId, displayName }: Props) {
           
           {/* Header */}
           <div className="flex items-center gap-3 px-6 py-5 border-b border-noir-border/40">
+            <button
+              onClick={onLeave}
+              className="mr-2 text-noir-ash hover:text-accent-gold transition-colors text-sm flex items-center gap-1 font-mono cursor-pointer"
+              title="Leave Room"
+            >
+              ← Back
+            </button>
             <span className="font-display text-xl text-accent-gold">NoirSync</span>
             <span className="text-noir-dim">·</span>
             <span className="font-mono text-xs text-noir-ash tracking-widest">LISTENING</span>
@@ -400,6 +415,34 @@ export function ViewerView({ roomId, displayName }: Props) {
                   >
                     📋 Copy Invite Link
                   </Button>
+                </GlassPanel>
+
+                {/* Active Listeners */}
+                <GlassPanel className="p-4 space-y-3">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-noir-border/30">
+                    <span className="font-mono text-[10px] tracking-[0.25em] text-noir-ash uppercase">
+                      Listeners ({sortedMembers.length})
+                    </span>
+                  </div>
+                  <div className="max-h-32 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                    {sortedMembers.map((m) => (
+                      <div key={m.id} className="flex items-center justify-between text-xs font-mono">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="shrink-0" title={m.role === 'host' ? 'Host' : 'Viewer'}>
+                            {m.role === 'host' ? '👑' : '🎧'}
+                          </span>
+                          <span className="text-noir-white truncate" title={m.displayName}>
+                            {m.displayName}
+                          </span>
+                        </div>
+                        {m.id === getSocket().id && (
+                          <span className="text-[9px] text-accent-gold bg-accent-gold/10 px-1 rounded border border-accent-gold/20">
+                            You
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </GlassPanel>
 
                 {/* Playback status */}
@@ -613,6 +656,20 @@ export function ViewerView({ roomId, displayName }: Props) {
 
       {/* ── MOBILE LAYOUT (less than lg) ──────────────────────────────── */}
       <div className="flex lg:hidden flex-col h-[calc(100vh-4rem)] overflow-y-auto z-10 p-4 pb-24 space-y-4">
+        {/* Mobile Header Bar */}
+        <div className="flex items-center justify-between pb-2 border-b border-noir-border/30">
+          <button
+            onClick={onLeave}
+            className="text-noir-ash hover:text-accent-gold transition-colors text-sm flex items-center gap-1 font-mono cursor-pointer"
+          >
+            ← Leave Room
+          </button>
+          <div className="flex items-center gap-1.5 bg-noir-charcoal/50 px-2.5 py-1 rounded-full border border-noir-border/30">
+            <span className="font-mono text-[9px] text-noir-ash uppercase tracking-wider">Listener</span>
+            <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
+          </div>
+        </div>
+
         {mobileTab === 'player' && (
           <div className="space-y-4">
             {/* Room info card */}
@@ -632,6 +689,34 @@ export function ViewerView({ roomId, displayName }: Props) {
               >
                 📋 Copy Invite Link
               </Button>
+            </GlassPanel>
+
+            {/* Active Listeners */}
+            <GlassPanel className="p-4 space-y-3">
+              <div className="flex items-center justify-between pb-1.5 border-b border-noir-border/30">
+                <span className="font-mono text-[10px] tracking-[0.25em] text-noir-ash uppercase">
+                  Listeners ({sortedMembers.length})
+                </span>
+              </div>
+              <div className="max-h-32 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                {sortedMembers.map((m) => (
+                  <div key={m.id} className="flex items-center justify-between text-xs font-mono">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="shrink-0" title={m.role === 'host' ? 'Host' : 'Viewer'}>
+                        {m.role === 'host' ? '👑' : '🎧'}
+                      </span>
+                      <span className="text-noir-white truncate" title={m.displayName}>
+                        {m.displayName}
+                      </span>
+                    </div>
+                    {m.id === getSocket().id && (
+                      <span className="text-[9px] text-accent-gold bg-accent-gold/10 px-1 rounded border border-accent-gold/20">
+                        You
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
             </GlassPanel>
 
             {/* Playback status */}

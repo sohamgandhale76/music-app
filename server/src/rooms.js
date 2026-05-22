@@ -213,6 +213,7 @@ class Room {
       chunkCount: this.chunks.size,
       availableChunks: this.getAvailableChunkIndices(),
       memberCount: this.getMemberCount(),
+      members: this.getMembersArray(),
     };
   }
 

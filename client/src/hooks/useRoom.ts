@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { connectSocket } from '../lib/socket';
 
+export interface MemberInfo {
+  id: string;
+  role: 'host' | 'viewer';
+  displayName: string;
+}
+
 export interface RoomState {
   isPlaying: boolean;
   currentTime: number;
@@ -10,6 +16,7 @@ export interface RoomState {
   totalChunks: number | null;
   songName: string;
   memberCount: number;
+  members: MemberInfo[];
   libraryTrackId: string | null;
   coverFilename: string | null;
   lyrics: Array<{ time: number; text: string }>;
@@ -27,6 +34,7 @@ const DEFAULT_STATE: RoomState = {
   totalChunks: null,
   songName: '',
   memberCount: 0,
+  members: [],
   libraryTrackId: null,
   coverFilename: null,
   lyrics: [],
@@ -80,12 +88,12 @@ export function useRoom(
       setRoomError(message);
     };
 
-    const handleMemberJoined = ({ memberCount }: { memberCount: number }) => {
-      setRoomState((s) => ({ ...s, memberCount }));
+    const handleMemberJoined = ({ memberCount, members }: { memberCount: number; members: MemberInfo[] }) => {
+      setRoomState((s) => ({ ...s, memberCount, members }));
     };
 
-    const handleMemberLeft = ({ memberCount }: { memberCount: number }) => {
-      setRoomState((s) => ({ ...s, memberCount }));
+    const handleMemberLeft = ({ memberCount, members }: { memberCount: number; members: MemberInfo[] }) => {
+      setRoomState((s) => ({ ...s, memberCount, members }));
     };
 
     const handleSyncPlay = (data: {

@@ -542,6 +542,7 @@ io.on('connection', (socket) => {
       displayName,
       role,
       memberCount: room.getMemberCount(),
+      members: room.getMembersArray(),
     });
 
     logger.info('Member joined room', { roomId, displayName, role, members: room.getMemberCount() });
@@ -693,6 +694,7 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('room:member_left', {
           socketId: socket.id,
           memberCount: room.getMemberCount(),
+          members: room.getMembersArray(),
         });
       }
     }
