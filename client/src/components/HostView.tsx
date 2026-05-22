@@ -266,7 +266,7 @@ export function HostView({ roomId, displayName, onLeave }: Props) {
     };
   }, [roomState.libraryTrackId]);
 
-  const playTrack = useCallback((track: any) => {
+  const playTrack = useCallback(async (track: any) => {
     if (!audioRef.current) return;
     
     // Reset state for new song
@@ -276,6 +276,37 @@ export function HostView({ roomId, displayName, onLeave }: Props) {
     setActiveTrack(track);
 
     emitLoadLibraryTrack(track.id);
+
+    // Fetch fresh track metadata to get lrcText (may not be on the cached list object)
+    let lyricsLines: any[] = [];
+    let lyricsMeta: any = { title: track.title, artist: track.artist };
+    try {
+      const res = await fetch(`${SERVER_URL || ''}/api/library/tracks/${track.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.track?.lrcText) {
+          const parsed = parseLrc(data.track.lrcText);
+          lyricsLines = parsed.lines;
+          lyricsMeta = {
+            title: parsed.meta.title || track.title,
+            artist: parsed.meta.artist || track.artist,
+          };
+          setLyrics(parsed.lines);
+          setLrcMeta(lyricsMeta);
+        }
+      }
+    } catch { /* non-fatal */ }
+
+    // Broadcast lyrics + metadata to all listeners via room state
+    emitUpdateTrackMetadata({
+      songName: track.title,
+      totalChunks: 0,
+      mimeType: track.mimeType || 'audio/mpeg',
+      libraryTrackId: track.id,
+      coverFilename: track.coverFilename || null,
+      lyrics: lyricsLines,
+      lrcMeta: lyricsMeta,
+    });
 
     const url = `${SERVER_URL || ''}/api/library/tracks/${track.id}/download`;
     audioRef.current.src = url;
@@ -288,7 +319,7 @@ export function HostView({ roomId, displayName, onLeave }: Props) {
     }).catch(() => {});
 
     toast.success(`Playing "${track.title}" from library...`);
-  }, [emitLoadLibraryTrack, emitPlay, toast]);
+  }, [emitLoadLibraryTrack, emitPlay, emitUpdateTrackMetadata, toast]);
 
   const playNext = useCallback(() => {
     if (queue.length === 0) return;
