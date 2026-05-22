@@ -276,7 +276,7 @@ app.post('/api/library/tracks/:id/sync', apiLimiter, async (req, res) => {
 });
 
 // Download high-quality track (supporting HTTP 206 Range Requests for seeking)
-app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:filename'], apiLimiter, async (req, res) => {
+app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:filename'], async (req, res) => {
   const { id } = req.params;
   const track = libraryManager.getTrack(id);
   if (!track) return res.status(404).json({ error: 'Track not found' });
@@ -301,9 +301,10 @@ app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:
       if (end - start + 1 > maxRangeSize) {
         end = start + maxRangeSize - 1;
       }
-      if (end >= fileSize) {
-        end = fileSize - 1;
-      }
+    }
+
+    if (end >= fileSize) {
+      end = fileSize - 1;
     }
 
     if (start >= fileSize || end >= fileSize || start > end) {
@@ -396,7 +397,9 @@ app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:
         else if (mime.includes('mp4') || mime.includes('m4a')) ext = '.m4a';
         else ext = '.mp3';
       }
-      res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}${ext}"; filename*=UTF-8''${encodeURIComponent(track.title || 'track')}${ext}`);
+      if (isDownload) {
+        res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}${ext}"; filename*=UTF-8''${encodeURIComponent(track.title || 'track')}${ext}`);
+      }
       try {
         const telegramBot = require('./telegramBot');
         for (let i = 0; i < track.fileIds.length; i++) {
@@ -416,7 +419,9 @@ app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:
         return res.status(404).json({ error: 'Audio file not found on disk' });
       }
       const ext = path.extname(track.filename) || '.mp3';
-      res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}${ext}"; filename*=UTF-8''${encodeURIComponent(track.title || 'track')}${ext}`);
+      if (isDownload) {
+        res.setHeader('Content-Disposition', `attachment; filename="${safeTitle}${ext}"; filename*=UTF-8''${encodeURIComponent(track.title || 'track')}${ext}`);
+      }
       fs.createReadStream(filePath).pipe(res);
       return;
     }
@@ -442,7 +447,6 @@ app.get('/api/library/covers/:filename', (req, res) => {
 
 app.get(
   '/api/rooms/:roomId/chunks/:chunkIndex',
-  apiLimiter,
   validateRoomId,
   validateChunkIndex,
   async (req, res) => {
