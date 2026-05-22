@@ -89,6 +89,8 @@ export function LibraryBrowser({
   const fileRef = useRef<Map<string, File>>(new Map());
   const runningUploadsRef = useRef<Set<string>>(new Set());
   const lrcFilesMapRef = useRef<Map<string, File>>(new Map());
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const fetchTracks = useCallback(async () => {
     setLoading(true);
@@ -96,11 +98,33 @@ export function LibraryBrowser({
       const res = await fetch(`${SERVER_URL || ''}/api/library/tracks`);
       if (!res.ok) throw new Error('Failed to load library catalog');
       const data = await res.json();
-      setTracks(data.tracks || []);
+      // Filter out any test/dummy entries that have no real track properties
+      const realTracks = (data.tracks || []).filter((t: any) => t.id && t.title && !t.test);
+      setTracks(realTracks);
     } catch (err: any) {
       setError(err.message || 'Could not fetch catalog.');
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const handleSyncFromCloud = useCallback(async () => {
+    setIsSyncingCloud(true);
+    setSyncMessage(null);
+    setError(null);
+    try {
+      const res = await fetch(`${SERVER_URL || ''}/api/library/sync`, { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Sync failed');
+      setSyncMessage(`✓ Synced ${data.count} track${data.count !== 1 ? 's' : ''} from cloud`);
+      // Filter out test entries
+      const realTracks = (data.tracks || []).filter((t: any) => t.id && t.title && !t.test);
+      setTracks(realTracks);
+      setTimeout(() => setSyncMessage(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Could not sync from cloud.');
+    } finally {
+      setIsSyncingCloud(false);
     }
   }, []);
 
@@ -532,7 +556,7 @@ export function LibraryBrowser({
           </div>
 
           {/* Interactive Library Upload triggers */}
-          <div className="flex gap-2.5 w-full sm:w-auto">
+          <div className="flex gap-2.5 w-full sm:w-auto flex-wrap">
             <label className="flex-1 sm:flex-none">
               <input
                 type="file"
@@ -568,8 +592,27 @@ export function LibraryBrowser({
                 📂 Upload Folder
               </span>
             </label>
+
+            <button
+              onClick={handleSyncFromCloud}
+              disabled={isSyncingCloud}
+              title="Re-sync library catalog from Telegram cloud storage"
+              className="flex-1 sm:flex-none py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 font-ui text-xs font-medium uppercase tracking-wider border border-sky-500/40 text-sky-400 hover:bg-sky-500/10 hover:border-sky-400/60 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer bg-transparent"
+            >
+              {isSyncingCloud ? (
+                <><span className="animate-spin inline-block">↻</span> Syncing...</>
+              ) : (
+                <>☁ Sync Cloud</>
+              )}
+            </button>
           </div>
         </div>
+
+        {syncMessage && (
+          <div className="p-3 rounded-lg bg-emerald-950/20 border border-emerald-800/50 text-emerald-400 font-mono text-xs flex items-center gap-2">
+            <span>☁</span> {syncMessage}
+          </div>
+        )}
 
         {error && (
           <div className="p-4 rounded-lg bg-red-950/20 border border-red-900/50 text-red-400 font-ui text-sm">

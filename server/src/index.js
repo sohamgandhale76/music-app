@@ -188,6 +188,24 @@ app.get('/api/library/tracks', apiLimiter, (_req, res) => {
   res.json({ tracks: libraryManager.getTracks() });
 });
 
+// Manually trigger a re-sync of the library catalog from Telegram cloud
+app.post('/api/library/sync', apiLimiter, async (_req, res) => {
+  const telegramBot = require('./telegramBot');
+  if (!telegramBot.isEnabled()) {
+    return res.status(400).json({ error: 'Telegram Bot is not configured. Check TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID environment variables.' });
+  }
+  try {
+    logger.info('Manual catalog re-sync from Telegram triggered via API...');
+    await libraryManager.syncCatalogFromTelegram();
+    const tracks = libraryManager.getTracks();
+    logger.info('Manual sync complete', { count: tracks.length });
+    res.json({ ok: true, count: tracks.length, tracks });
+  } catch (err) {
+    logger.error('Manual catalog sync failed', { error: err.message });
+    res.status(500).json({ error: `Sync failed: ${err.message}` });
+  }
+});
+
 // Delete a library track
 app.delete('/api/library/tracks/:id', apiLimiter, (req, res) => {
   const { id } = req.params;
@@ -719,8 +737,13 @@ async function startServer() {
   try {
     const telegramBot = require('./telegramBot');
     if (telegramBot.isEnabled()) {
-      logger.info('Syncing library catalog from Telegram cloud...');
+      logger.info('Syncing library catalog from Telegram cloud on startup...');
+      // Give Telegram bot polling 3s to settle before we try to read the pinned message
+      await new Promise(r => setTimeout(r, 3000));
       await libraryManager.syncCatalogFromTelegram();
+      logger.info('Startup Telegram sync complete', { count: libraryManager.getTracks().length });
+    } else {
+      logger.warn('Telegram not enabled on startup — TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing');
     }
   } catch (err) {
     logger.error('Failed to sync catalog from Telegram on startup', { error: err.message });
