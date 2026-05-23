@@ -284,8 +284,13 @@ export function ViewerView({ roomId, displayName, onLeave, audioRef }: Props) {
     };
 
     if (audio.readyState < 1) {
-      // Play immediately to capture user gesture, then seek when metadata loads
-      audio.play().catch(() => {});
+      // Play immediately to capture user gesture and trigger resource load/play
+      audio.play().then(() => {
+        setLocalPlaying(true);
+        setBuffering(false);
+      }).catch((err) => {
+        console.warn('[viewer] user sync trigger play failed:', err);
+      });
       
       const onLoadedMetadata = () => {
         audio.removeEventListener('loadedmetadata', onLoadedMetadata);
@@ -301,12 +306,6 @@ export function ViewerView({ roomId, displayName, onLeave, audioRef }: Props) {
         } else {
           audio.currentTime = Math.max(0, roomState.currentTime);
         }
-        audio.play().then(() => {
-          setLocalPlaying(true);
-          setBuffering(false);
-        }).catch((err) => {
-          console.warn('[viewer] play after metadata load failed:', err);
-        });
       };
       audio.addEventListener('loadedmetadata', onLoadedMetadata);
     } else {

@@ -90,8 +90,7 @@ export function LibraryBrowser({
   const fileRef = useRef<Map<string, File>>(new Map());
   const runningUploadsRef = useRef<Set<string>>(new Set());
   const lrcFilesMapRef = useRef<Map<string, File>>(new Map());
-  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
 
   const fetchTracks = useCallback(async () => {
     setLoading(true);
@@ -109,25 +108,7 @@ export function LibraryBrowser({
     }
   }, []);
 
-  const handleSyncFromCloud = useCallback(async () => {
-    setIsSyncingCloud(true);
-    setSyncMessage(null);
-    setError(null);
-    try {
-      const res = await fetch(`${SERVER_URL || ''}/api/library/sync`, { method: 'POST' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Sync failed');
-      setSyncMessage(`✓ Synced ${data.count} track${data.count !== 1 ? 's' : ''} from cloud`);
-      // Filter out test entries
-      const realTracks = (data.tracks || []).filter((t: any) => t.id && t.title && !t.test);
-      setTracks(realTracks);
-      setTimeout(() => setSyncMessage(null), 4000);
-    } catch (err: any) {
-      setError(err.message || 'Could not sync from cloud.');
-    } finally {
-      setIsSyncingCloud(false);
-    }
-  }, []);
+
 
   useEffect(() => {
     fetchTracks();
@@ -647,26 +628,11 @@ export function LibraryBrowser({
               </span>
             </label>
 
-            <button
-              onClick={handleSyncFromCloud}
-              disabled={isSyncingCloud}
-              title="Re-sync library catalog from Telegram cloud storage"
-              className="flex-1 sm:flex-none py-2.5 px-4 rounded-lg flex items-center justify-center gap-2 font-ui text-xs font-medium uppercase tracking-wider border border-sky-500/40 text-sky-400 hover:bg-sky-500/10 hover:border-sky-400/60 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer bg-transparent"
-            >
-              {isSyncingCloud ? (
-                <><span className="animate-spin inline-block">↻</span> Syncing...</>
-              ) : (
-                <>☁ Sync Cloud</>
-              )}
-            </button>
+
           </div>
         </div>
 
-        {syncMessage && (
-          <div className="p-3 rounded-lg bg-emerald-950/20 border border-emerald-800/50 text-emerald-400 font-mono text-xs flex items-center gap-2">
-            <span>☁</span> {syncMessage}
-          </div>
-        )}
+
 
         {error && (
           <div className="p-4 rounded-lg bg-red-950/20 border border-red-900/50 text-red-400 font-ui text-sm">
