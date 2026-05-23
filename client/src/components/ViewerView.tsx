@@ -306,6 +306,12 @@ export function ViewerView({ roomId, displayName, onLeave, audioRef }: Props) {
         } else {
           audio.currentTime = Math.max(0, roomState.currentTime);
         }
+        audio.play().then(() => {
+          setLocalPlaying(true);
+          setBuffering(false);
+        }).catch((err) => {
+          console.warn('[viewer] play after metadata load failed:', err);
+        });
       };
       audio.addEventListener('loadedmetadata', onLoadedMetadata);
     } else {
