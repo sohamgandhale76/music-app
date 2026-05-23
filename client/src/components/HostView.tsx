@@ -462,8 +462,8 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
 
 
   const processFiles = useCallback(async (files: File[]) => {
-    const audio = files.find((f) => f.type.startsWith('audio/'));
-    const lrc   = files.find((f) => f.name.toLowerCase().endsWith('.lrc'));
+    const audio = files.find((f) => f?.type?.startsWith('audio/'));
+    const lrc   = files.find((f) => (f?.name || '').toLowerCase().endsWith('.lrc'));
     
     let lrcData: { lines: any[]; meta: any } | null = null;
     if (lrc) {

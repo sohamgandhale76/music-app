@@ -19,7 +19,7 @@ function parseLrc(content) {
     const metaMatch = META_REGEX.exec(line);
     if (metaMatch) {
       const [, key, value] = metaMatch;
-      switch (key.toLowerCase()) {
+      switch ((key || '').toLowerCase()) {
         case 'ti': meta.title  = value.trim(); break;
         case 'ar': meta.artist = value.trim(); break;
         case 'al': meta.album  = value.trim(); break;

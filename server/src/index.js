@@ -373,7 +373,7 @@ app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:
       const safeTitle = (track.title || 'track').replace(/["\\]/g, '');
       let ext = track.source === 'telegram' ? track.originalExtension : path.extname(track.filename || '');
       if (!ext) {
-        const mime = (track.mimeType || '').toLowerCase();
+        const mime = (track?.mimeType || '').toLowerCase();
         if (mime.includes('flac')) ext = '.flac';
         else if (mime.includes('wav')) ext = '.wav';
         else if (mime.includes('ogg')) ext = '.ogg';
@@ -439,7 +439,7 @@ app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:
     if (track.source === 'telegram') {
       let ext = track.originalExtension;
       if (!ext) {
-        const mime = (track.mimeType || '').toLowerCase();
+        const mime = (track?.mimeType || '').toLowerCase();
         if (mime.includes('flac')) ext = '.flac';
         else if (mime.includes('wav')) ext = '.wav';
         else if (mime.includes('ogg')) ext = '.ogg';

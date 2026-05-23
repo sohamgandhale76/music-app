@@ -26,7 +26,8 @@ export interface LibraryTrack {
   lrcText?: string;
 }
 
-export function resolveExtension(track: LibraryTrack): string {
+export function resolveExtension(track?: LibraryTrack | null): string {
+  if (!track) return '.mp3';
   if (track.originalExtension) return track.originalExtension;
   if (track.filename && track.filename.includes('.')) {
     return track.filename.substring(track.filename.lastIndexOf('.'));
@@ -283,11 +284,12 @@ export function LibraryBrowser({
   }, [uploadTasks, fetchTracks]);
 
   const addFilesToQueue = useCallback((allFiles: File[]) => {
-    const audioFiles = allFiles.filter(f => !f.name.toLowerCase().endsWith('.lrc'));
-    const lrcFiles = allFiles.filter(f => f.name.toLowerCase().endsWith('.lrc'));
+    const audioFiles = allFiles.filter(f => !(f?.name || '').toLowerCase().endsWith('.lrc'));
+    const lrcFiles = allFiles.filter(f => (f?.name || '').toLowerCase().endsWith('.lrc'));
 
     const lrcMap = new Map<string, File>();
     lrcFiles.forEach(f => {
+      if (!f?.name) return;
       const idx = f.name.lastIndexOf('.');
       const base = idx !== -1 ? f.name.substring(0, idx).toLowerCase() : f.name.toLowerCase();
       lrcMap.set(base, f);
@@ -295,12 +297,13 @@ export function LibraryBrowser({
 
     const newTasks: UploadTask[] = [];
     audioFiles.forEach((file) => {
+      if (!file) return;
       const id = Math.random().toString(36).substring(7) + '_' + Date.now();
       fileRef.current.set(id, file);
 
       // Check for associated LRC file
-      const idx = file.name.lastIndexOf('.');
-      const base = idx !== -1 ? file.name.substring(0, idx).toLowerCase() : file.name.toLowerCase();
+      const idx = file.name ? file.name.lastIndexOf('.') : -1;
+      const base = idx !== -1 ? file.name.substring(0, idx).toLowerCase() : (file.name || '').toLowerCase();
       const lrcFile = lrcMap.get(base);
       if (lrcFile) {
         lrcFilesMapRef.current.set(id, lrcFile);
@@ -445,7 +448,8 @@ export function LibraryBrowser({
   };
 
   const filteredTracks = tracks.filter((t) => {
-    const term = searchQuery.toLowerCase();
+    if (!t) return false;
+    const term = (searchQuery || '').toLowerCase();
     return (
       (t.title || '').toLowerCase().includes(term) ||
       (t.artist || '').toLowerCase().includes(term) ||
@@ -480,8 +484,9 @@ export function LibraryBrowser({
       artist,
     };
   }).filter((a) => {
+    if (!a) return false;
     if (!searchQuery) return true;
-    const term = searchQuery.toLowerCase();
+    const term = (searchQuery || '').toLowerCase();
     return (
       (a.name || '').toLowerCase().includes(term) ||
       (a.artist || '').toLowerCase().includes(term)
@@ -506,8 +511,9 @@ export function LibraryBrowser({
       tracks: genreTracks,
     };
   }).filter((g) => {
+    if (!g) return false;
     if (!searchQuery) return true;
-    return (g.name || '').toLowerCase().includes(searchQuery.toLowerCase());
+    return (g.name || '').toLowerCase().includes((searchQuery || '').toLowerCase());
   });
 
   const handleHostTrackListAction = (trackList: LibraryTrack[]) => {

@@ -10,7 +10,7 @@ const LIBRARY_FILE = path.join(DATA_DIR, 'library.json');
 const UPLOADS_DIR = path.join(__dirname, '../uploads');
 
 function getMimeTypeFromExtension(filename, fallbackMime) {
-  const ext = path.extname(filename).toLowerCase();
+  const ext = path.extname(filename || '').toLowerCase();
   switch (ext) {
     case '.flac': return 'audio/flac';
     case '.wav':  return 'audio/wav';
@@ -95,15 +95,15 @@ class LibraryManager {
       metadata = { common: {}, format: {} };
     }
 
-    const duration = metadata.format.duration || 0; // seconds
-    const bitrate = metadata.format.bitrate || 0;    // bits/sec (e.g. 320000 for 320kbps)
-    const formatName = (metadata.format.container || '').toLowerCase();
+    const duration = metadata?.format?.duration || 0; // seconds
+    const bitrate = metadata?.format?.bitrate || 0;    // bits/sec (e.g. 320000 for 320kbps)
+    const formatName = (metadata?.format?.container || '').toLowerCase();
 
     // 2. Validate High Quality
     // WAV, FLAC, ALAC, AIFF are automatically HQ.
     // Lossy formats (MP3, AAC, OGG, M4A) must have bitrate >= 192kbps (192000 bits/sec).
     const isLossless = ['wav', 'flac', 'aiff', 'alac', 'ape', 'wavpack'].some(ext => 
-      formatName.includes(ext) || originalFilename.toLowerCase().endsWith('.' + ext)
+      formatName.includes(ext) || (originalFilename || '').toLowerCase().endsWith('.' + ext)
     );
 
     const bitrateKbps = Math.round(bitrate / 1000);
