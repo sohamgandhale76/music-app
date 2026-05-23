@@ -42,11 +42,33 @@ class LibraryManager {
     try {
       const buffer = await telegramBot.getPinnedCatalog();
       if (buffer) {
-        fs.writeFileSync(LIBRARY_FILE, buffer);
-        this.tracks = JSON.parse(buffer.toString('utf8'));
-        logger.info('Successfully synced catalog from Telegram cloud', { count: this.tracks.length });
+        const cloudTracks = JSON.parse(buffer.toString('utf8'));
+        
+        const mergedTracks = [...this.tracks];
+        let mergedCount = 0;
+        
+        cloudTracks.forEach((cloudTrack) => {
+          if (cloudTrack.test) return;
+          
+          const localIndex = mergedTracks.findIndex(t => t.id === cloudTrack.id);
+          if (localIndex === -1) {
+            mergedTracks.push(cloudTrack);
+            mergedCount++;
+          } else {
+            mergedTracks[localIndex] = { ...mergedTracks[localIndex], ...cloudTrack };
+          }
+        });
+        
+        this.tracks = mergedTracks;
+        this.saveCatalog();
+        
+        logger.info('Successfully synced and merged catalog from Telegram cloud', { 
+          totalCount: this.tracks.length, 
+          cloudCount: cloudTracks.length,
+          mergedCount
+        });
       } else {
-        logger.info('No pinned catalog found on Telegram, starting with local/empty catalog');
+        logger.info('No pinned catalog found on Telegram, keeping local catalog');
       }
     } catch (err) {
       logger.error('Error syncing catalog from Telegram', { error: err.message });
@@ -137,24 +159,25 @@ class LibraryManager {
         source = 'telegram';
         const fileBuffer = fs.readFileSync(tempFilePath);
 
-        // Use 4MB chunks (Telegram max document size is 50MB but we want fast uploads)
-        // This gives ~10 chunks for a 41MB file instead of 41 chunks with 5s time-based splitting
-        const MAX_CHUNK_BYTES = 4 * 1024 * 1024; // 4MB
+        // Use 8MB chunks to reduce the number of HTTP requests for large files
+        const MAX_CHUNK_BYTES = 8 * 1024 * 1024; // 8MB
         const totalChunks = Math.ceil(fileBuffer.length / MAX_CHUNK_BYTES);
         const bytesPerChunk = Math.ceil(fileBuffer.length / totalChunks);
         
-        fileIds = [];
-        logger.info(`Telegram cloud storage active. Uploading track ${trackId} in ${totalChunks} chunks (${(bytesPerChunk/1024/1024).toFixed(1)}MB each)...`);
+        logger.info(`Telegram cloud storage active. Uploading track ${trackId} in ${totalChunks} chunks (${(bytesPerChunk/1024/1024).toFixed(1)}MB each) in parallel...`);
         
-        for (let i = 0; i < totalChunks; i++) {
-          const start = i * bytesPerChunk;
-          const end = Math.min(start + bytesPerChunk, fileBuffer.length);
-          const slice = fileBuffer.subarray(start, end);
-          
-          const fileId = await telegramBot.uploadChunk(slice, `${trackId}_chunk_${i}.bin`);
-          fileIds.push(fileId);
-          logger.info(`  Chunk ${i + 1}/${totalChunks} uploaded (${(slice.length/1024/1024).toFixed(1)}MB)`);
-        }
+        const chunkIndices = Array.from({ length: totalChunks }, (_, i) => i);
+        fileIds = await Promise.all(
+          chunkIndices.map(async (i) => {
+            const start = i * bytesPerChunk;
+            const end = Math.min(start + bytesPerChunk, fileBuffer.length);
+            const slice = fileBuffer.subarray(start, end);
+            
+            const fileId = await telegramBot.uploadChunk(slice, `${trackId}_chunk_${i}.bin`);
+            logger.info(`  Chunk ${i + 1}/${totalChunks} uploaded successfully (${(slice.length/1024/1024).toFixed(1)}MB)`);
+            return fileId;
+          })
+        );
         
         logger.info(`Track successfully uploaded to Telegram: ${trackId}`, { totalChunks });
         
