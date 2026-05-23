@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { RoomLobby }     from './components/RoomLobby';
 import { HostView }      from './components/HostView';
@@ -17,6 +17,7 @@ interface Session {
 
 export default function App() {
   const { synced } = useNtpSync();
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   const [session, setSession] = useState<Session>({
     role: null,
@@ -25,6 +26,20 @@ export default function App() {
   });
 
   const handleJoin = (role: 'host' | 'viewer', roomId: string, displayName: string) => {
+    // Unlock the audio element right here inside the click handler!
+    const audio = audioRef.current;
+    if (audio) {
+      // Play a tiny silence to unlock
+      const silentSrc = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAAA';
+      audio.src = silentSrc;
+      audio.play().then(() => {
+        audio.pause();
+        console.info('[App] Audio element successfully unlocked via lobby interaction');
+      }).catch((err) => {
+        console.warn('[App] Failed to unlock audio element:', err);
+      });
+    }
+
     setSession({ role, roomId, displayName });
     // Update URL for shareable state (viewer link)
     if (role === 'viewer') {
@@ -71,15 +86,16 @@ export default function App() {
 
       {session.role === 'host' && (
         <ErrorBoundary>
-          <HostView roomId={session.roomId} displayName={session.displayName} onLeave={handleLeave} />
+          <HostView roomId={session.roomId} displayName={session.displayName} onLeave={handleLeave} audioRef={audioRef} />
         </ErrorBoundary>
       )}
 
       {session.role === 'viewer' && (
         <ErrorBoundary>
-          <ViewerView roomId={session.roomId} displayName={session.displayName} onLeave={handleLeave} />
+          <ViewerView roomId={session.roomId} displayName={session.displayName} onLeave={handleLeave} audioRef={audioRef} />
         </ErrorBoundary>
       )}
+      <audio ref={audioRef} preload="auto" className="hidden" aria-hidden="true" />
     </ErrorBoundary>
   );
 }

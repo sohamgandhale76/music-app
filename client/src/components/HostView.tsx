@@ -19,6 +19,7 @@ interface Props {
   roomId: string;
   displayName: string;
   onLeave: () => void;
+  audioRef: React.RefObject<HTMLAudioElement | null>;
 }
 
 function formatTime(secs: number): string {
@@ -27,7 +28,7 @@ function formatTime(secs: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function HostView({ roomId, displayName, onLeave }: Props) {
+export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
   const {
     connected,
     roomState,
@@ -47,8 +48,6 @@ export function HostView({ roomId, displayName, onLeave }: Props) {
     if (a.role !== 'host' && b.role === 'host') return 1;
     return (a.displayName || '').localeCompare(b.displayName || '');
   });
-
-  const audioRef         = useRef<HTMLAudioElement>(null);
   const [lyrics, setLyrics]           = useState<LrcLine[]>([]);
   const [lrcMeta, setLrcMeta]         = useState<LrcMeta>({});
   const [activeTrack, setActiveTrack] = useState<any>(null);
@@ -757,8 +756,7 @@ export function HostView({ roomId, displayName, onLeave }: Props) {
                   </p>
                 </div>
 
-                {/* Hidden native audio element */}
-                <audio ref={audioRef} preload="auto" className="hidden" />
+                {/* Hidden native audio element (managed by parent App) */}
 
                 {/* Progress/seek */}
                 <div className="space-y-1">

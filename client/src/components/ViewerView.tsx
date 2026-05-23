@@ -22,6 +22,7 @@ interface Props {
   roomId: string;
   displayName: string;
   onLeave: () => void;
+  audioRef: React.RefObject<HTMLAudioElement | null>;
 }
 
 const PREFETCH_AHEAD = 4;
@@ -32,7 +33,7 @@ function formatTime(secs: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function ViewerView({ roomId, displayName, onLeave }: Props) {
+export function ViewerView({ roomId, displayName, onLeave, audioRef }: Props) {
   const { connected, roomState, roomError } = useRoom(roomId, 'viewer', displayName);
   const toast = useToast();
 
@@ -41,8 +42,6 @@ export function ViewerView({ roomId, displayName, onLeave }: Props) {
     if (a.role !== 'host' && b.role === 'host') return 1;
     return (a.displayName || '').localeCompare(b.displayName || '');
   });
-
-  const audioRef         = useRef<HTMLAudioElement>(null);
   const mseRef           = useRef<SourceBufferManager | null>(null);
   const downloadedRef    = useRef<Set<number>>(new Set());
   const prefetchQueueRef = useRef<boolean>(false);
@@ -905,8 +904,7 @@ export function ViewerView({ roomId, displayName, onLeave }: Props) {
         </button>
       </div>
 
-      {/* Hidden audio */}
-      <audio ref={audioRef} preload="auto" className="hidden" aria-hidden="true" />
+      {/* Hidden audio (managed by parent App) */}
     </div>
   );
 }
