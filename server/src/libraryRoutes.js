@@ -59,6 +59,7 @@ function getExt(file) {
 router.get('/', async (_req, res) => {
   try {
     const tracks = await getAllTracks();
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.json(tracks);
   } catch (err) {
     logger.error('GET /library failed', { error: err.message });
@@ -76,6 +77,7 @@ router.get('/storage', async (_req, res) => {
   try {
     const used = await getTotalStorageUsed();
     const percentUsed = ((used / LIMIT_BYTES) * 100).toFixed(1);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.json({
       used,
       limit: Math.round(LIMIT_BYTES),

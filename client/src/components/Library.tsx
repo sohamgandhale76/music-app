@@ -446,10 +446,16 @@ export function Library({ onSelectTrack }: LibraryProps) {
   const fetchTracks = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${base}/library`);
+      const res = await fetch(`${base}/library?t=${Date.now()}`);
       if (!res.ok) throw new Error('Failed to load R2 library');
-      setTracks(await res.json() as R2Track[]);
+      const data = await res.json();
+      console.log('GET /library response:', data);
+
+      // Handle both direct array responses and wrapped objects like { tracks: [...] }
+      const tracksArray = Array.isArray(data) ? data : (data && data.tracks ? data.tracks : []);
+      setTracks(tracksArray);
     } catch (err: unknown) {
+      console.error('Error fetching tracks:', err);
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
@@ -458,9 +464,15 @@ export function Library({ onSelectTrack }: LibraryProps) {
 
   const fetchStorage = useCallback(async () => {
     try {
-      const res = await fetch(`${base}/library/storage`);
-      if (res.ok) setStorage(await res.json() as StorageStats);
-    } catch { /* non-fatal */ }
+      const res = await fetch(`${base}/library/storage?t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        console.log('GET /library/storage response:', data);
+        setStorage(data as StorageStats);
+      }
+    } catch (err) {
+      console.error('Error fetching storage stats:', err);
+    }
   }, [base]);
 
   useEffect(() => {
