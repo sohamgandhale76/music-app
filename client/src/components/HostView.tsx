@@ -9,6 +9,7 @@ import { useRoom } from '../hooks/useRoom';
 import { useToast } from '../hooks/useToast';
 import { ToastContainer } from './Toast';
 import { Library } from './Library';
+import { LibraryBrowser } from './LibraryBrowser';
 import { DynamicBackground } from './DynamicBackground';
 import { sliceAudioFile, timeToChunkIndex, CHUNK_DURATION } from '../lib/chunker';
 import { parseLrc, type LrcLine, type LrcMeta } from '../lib/lrcParser';
@@ -63,6 +64,7 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
   const [activeTab, setActiveTab]     = useState<'player' | 'library'>('player');
   const [mobileTab, setMobileTab]     = useState<'player' | 'lyrics' | 'library'>('player');
   const [showR2Library, setShowR2Library] = useState(false);
+  const [libraryMode, setLibraryMode]     = useState<'r2' | 'local'>('r2');
 
   // Queue and Playback states
   // const [libraryTracks, setLibraryTracks] = useState<any[]>([]);
@@ -368,29 +370,52 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
     }
   }, [queue, currentQueueIndex, isRepeat, playTrack, emitSeek]);
 
-  // const handleHostLibraryTrack = useCallback((trackId: string) => {
-  //   const track = libraryTracks.find(t => t.id === trackId);
-  //   if (track) {
-  //     let idx = queue.findIndex(t => t.id === trackId);
-  //     if (idx === -1) {
-  //       const newQueue = [...queue, track];
-  //       setQueue(newQueue);
-  //       idx = newQueue.length - 1;
-  //     }
-  //     setCurrentQueueIndex(idx);
-  //     playTrack(track);
-  //   } else {
-  //     emitLoadLibraryTrack(trackId);
-  //     const url = `${SERVER_URL || ''}/api/library/tracks/${trackId}/download`;
-  //     if (audioRef.current) {
-  //       audioRef.current.src = url;
-  //       audioRef.current.load();
-  //       setAudioReady(true);
-  //     }
-  //     toast.success('Loading track...');
-  //   }
-  //   setActiveTab('player');
-  // }, [libraryTracks, queue, playTrack, emitLoadLibraryTrack, toast]);
+  const handleHostLibraryTrack = useCallback(async (trackId: string) => {
+    setShowR2Library(false);
+    try {
+      const res = await fetch(`${SERVER_URL || ''}/api/library/tracks/${trackId}`);
+      if (!res.ok) throw new Error('Failed to load track from temporary library');
+      const data = await res.json();
+      if (data.track) {
+        playTrack(data.track);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to play track');
+    }
+  }, [playTrack, toast]);
+
+  const handleHostLibraryTrackList = useCallback((tracksToHost: any[], startIndex = 0) => {
+    if (tracksToHost.length === 0) return;
+    setQueue(tracksToHost);
+    setCurrentQueueIndex(startIndex);
+    playTrack(tracksToHost[startIndex]);
+    setActiveTab('player');
+    toast.success(`Hosting set of ${tracksToHost.length} songs`);
+  }, [playTrack, toast]);
+
+  const handleAddToQueue = useCallback((track: any) => {
+    setQueue(prev => {
+      const alreadyIn = prev.some(t => t.id === track.id);
+      if (alreadyIn) {
+        toast.success(`"${track.title}" is already in queue`);
+        return prev;
+      }
+      toast.success(`Added "${track.title}" to queue`);
+      return [...prev, track];
+    });
+  }, [toast]);
+
+  const handleAddTracksToQueue = useCallback((newTracks: any[]) => {
+    setQueue(prev => {
+      const filtered = newTracks.filter(nt => !prev.some(pt => pt.id === nt.id));
+      if (filtered.length === 0) {
+        toast.success('All songs are already in the queue');
+        return prev;
+      }
+      toast.success(`Added ${filtered.length} songs to queue`);
+      return [...prev, ...filtered];
+    });
+  }, [toast]);
 
   // ── R2 Library: host picks a track from R2 → signed URL → audioRef ──────
   const handleR2TrackSelect = useCallback(async (track: any, signedUrl: string) => {
@@ -398,10 +423,11 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
     
     console.log(`[R2 Host] Fetching signed URL for "${track.title}":`, signedUrl);
     const toastId = toast.show(`Downloading "${track.title}" from R2 Library...`, 'info', 10000);
-
     try {
-      // 1. Fetch ArrayBuffer from the signed R2 URL
-      const res = await fetch(signedUrl);
+      // 1. Fetch ArrayBuffer from the server download proxy (bypasses R2 CORS issues)
+      const downloadUrl = `${SERVER_URL || ''}/api/library/tracks/${track.id}/download`;
+      console.log(`[R2 Host] Fetching audio from proxy URL: ${downloadUrl}`);
+      const res = await fetch(downloadUrl);
       if (!res.ok) throw new Error(`HTTP ${res.status} failed to download audio file`);
       
       const arrayBuffer = await res.arrayBuffer();
@@ -474,38 +500,7 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
     }
   }, [handleAudioFile, toast, emitPlay]);
 
-  // const handleHostLibraryTrackList = useCallback((tracksToHost: any[], startIndex = 0) => {
-  //   if (tracksToHost.length === 0) return;
-  //   setQueue(tracksToHost);
-  //   setCurrentQueueIndex(startIndex);
-  //   playTrack(tracksToHost[startIndex]);
-  //   setActiveTab('player');
-  //   toast.success(`Hosting set of ${tracksToHost.length} songs`);
-  // }, [playTrack, toast]);
-
-  // const handleAddToQueue = useCallback((track: any) => {
-  //   setQueue(prev => {
-  //     const alreadyIn = prev.some(t => t.id === track.id);
-  //     if (alreadyIn) {
-  //       toast.success(`"${track.title}" is already in queue`);
-  //       return prev;
-  //     }
-  //     toast.success(`Added "${track.title}" to queue`);
-  //     return [...prev, track];
-  //   });
-  // }, [toast]);
-
-  // const handleAddTracksToQueue = useCallback((newTracks: any[]) => {
-  //   setQueue(prev => {
-  //     const filtered = newTracks.filter(nt => !prev.some(pt => pt.id === nt.id));
-  //     if (filtered.length === 0) {
-  //       toast.success('All songs are already in the queue');
-  //       return prev;
-  //     }
-  //     toast.success(`Added ${filtered.length} songs to queue`);
-  //     return [...prev, ...filtered];
-  //   });
-  // }, [toast]);
+  // Callbacks are implemented above
 
   const handleRemoveFromQueue = useCallback((idx: number) => {
     setQueue(prev => prev.filter((_, i) => i !== idx));
@@ -759,7 +754,7 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
                   />
                 </div>
 
-                {/* ── Pick from R2 Library button ────────────────────── */}
+                {/* ── Pick from Library button ────────────────────── */}
                 <button
                   id="pick-r2-library-btn"
                   onClick={() => setShowR2Library(true)}
@@ -771,8 +766,8 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
                     transition-all duration-200 hover:scale-[1.01] active:scale-[0.99]
                   "
                 >
-                  <span className="text-base">☁</span>
-                  Pick from R2 Library
+                  <span className="text-base">🎶</span>
+                  Pick from Library
                 </button>
               </>
             ) : null}
@@ -1088,13 +1083,53 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
           {activeTab === 'library' ? (
             <div className="flex-1 p-8 overflow-y-auto z-10">
               <div className="max-w-4xl mx-auto space-y-6">
-                <div>
-                  <h1 className="font-display text-3xl text-noir-white">Music Library</h1>
-                  <p className="font-body text-noir-ash mt-1">
-                    High-quality persistent audio tracks catalog. Stream or host direct synced playback rooms.
-                  </p>
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                  <div>
+                    <h1 className="font-display text-3xl text-noir-white">Music Library</h1>
+                    <p className="font-body text-noir-ash mt-1">
+                      {libraryMode === 'r2'
+                        ? 'High-quality persistent audio tracks catalog. Stream or host direct synced playback rooms.'
+                        : 'Temporary local server catalog. Audio is uploaded to local disk and cleared when server restarts.'}
+                    </p>
+                  </div>
+                  
+                  {/* Mode Selector */}
+                  <div className="flex bg-noir-graphite/40 border border-noir-border/30 p-1 rounded-xl shrink-0 self-start md:self-auto">
+                    <button
+                      onClick={() => setLibraryMode('r2')}
+                      className={`px-4 py-1.5 rounded-lg font-mono text-[10px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+                        libraryMode === 'r2'
+                          ? 'bg-accent-gold/15 text-accent-gold border border-accent-gold/25'
+                          : 'text-noir-dim hover:text-noir-white border border-transparent'
+                      }`}
+                    >
+                      ☁ Cloud (R2)
+                    </button>
+                    <button
+                      onClick={() => setLibraryMode('local')}
+                      className={`px-4 py-1.5 rounded-lg font-mono text-[10px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+                        libraryMode === 'local'
+                          ? 'bg-accent-gold/15 text-accent-gold border border-accent-gold/25'
+                          : 'text-noir-dim hover:text-noir-white border border-transparent'
+                      }`}
+                    >
+                      ⏳ Temporary (Local)
+                    </button>
+                  </div>
                 </div>
-                <Library onLoadToRoom={handleR2TrackSelect} />
+
+                {libraryMode === 'r2' ? (
+                  <Library onLoadToRoom={handleR2TrackSelect} />
+                ) : (
+                  <LibraryBrowser
+                    isHost={true}
+                    onHostTrack={handleHostLibraryTrack}
+                    onHostTrackList={handleHostLibraryTrackList}
+                    onAddToQueue={handleAddToQueue}
+                    onAddTracksToQueue={handleAddTracksToQueue}
+                    activeTrackId={roomState.libraryTrackId}
+                  />
+                )}
               </div>
             </div>
           ) : (
@@ -1410,7 +1445,42 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
                 Selecting a song plays it instantly for the room.
               </p>
             </div>
-            <Library onLoadToRoom={handleR2TrackSelect} />
+            
+            <div className="flex bg-noir-graphite/40 border border-noir-border/30 p-1 rounded-xl w-full">
+              <button
+                onClick={() => setLibraryMode('r2')}
+                className={`flex-1 py-2 rounded-lg font-mono text-[10px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+                  libraryMode === 'r2'
+                    ? 'bg-accent-gold/15 text-accent-gold border border-accent-gold/25'
+                    : 'text-noir-dim hover:text-noir-white border border-transparent'
+                }`}
+              >
+                ☁ Cloud (R2)
+              </button>
+              <button
+                onClick={() => setLibraryMode('local')}
+                className={`flex-1 py-2 rounded-lg font-mono text-[10px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+                  libraryMode === 'local'
+                    ? 'bg-accent-gold/15 text-accent-gold border border-accent-gold/25'
+                    : 'text-noir-dim hover:text-noir-white border border-transparent'
+                }`}
+              >
+                ⏳ Temporary (Local)
+              </button>
+            </div>
+
+            {libraryMode === 'r2' ? (
+              <Library onLoadToRoom={handleR2TrackSelect} />
+            ) : (
+              <LibraryBrowser
+                isHost={true}
+                onHostTrack={handleHostLibraryTrack}
+                onHostTrackList={handleHostLibraryTrackList}
+                onAddToQueue={handleAddToQueue}
+                onAddTracksToQueue={handleAddTracksToQueue}
+                activeTrackId={roomState.libraryTrackId}
+              />
+            )}
           </div>
         )}
       </div>
@@ -1445,7 +1515,7 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
           <span>Library</span>
         </button>
       </div>
-      {/* ── R2 Library Modal ──────────────────────────────────────────── */}
+      {/* ── Library Modal ──────────────────────────────────────────── */}
       {showR2Library && (
         <div
           className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
@@ -1460,9 +1530,33 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
             <div className="flex items-center justify-between px-5 py-4 border-b border-noir-border/30 shrink-0">
               <div className="flex items-center gap-2">
                 <span className="text-accent-gold text-sm">☁</span>
-                <span className="font-mono text-[11px] text-accent-gold uppercase tracking-[0.2em]">R2 Library</span>
+                <span className="font-mono text-[11px] text-accent-gold uppercase tracking-[0.2em]">Music Library</span>
                 <span className="font-mono text-[10px] text-noir-dim">— pick a track to play in the room</span>
               </div>
+              
+              <div className="flex bg-noir-graphite/40 border border-noir-border/30 p-0.5 rounded-lg">
+                <button
+                  onClick={() => setLibraryMode('r2')}
+                  className={`px-3 py-1 rounded-md font-mono text-[9px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+                    libraryMode === 'r2'
+                      ? 'bg-accent-gold/15 text-accent-gold border border-accent-gold/25'
+                      : 'text-noir-dim hover:text-noir-white border border-transparent'
+                  }`}
+                >
+                  Cloud
+                </button>
+                <button
+                  onClick={() => setLibraryMode('local')}
+                  className={`px-3 py-1 rounded-md font-mono text-[9px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+                    libraryMode === 'local'
+                      ? 'bg-accent-gold/15 text-accent-gold border border-accent-gold/25'
+                      : 'text-noir-dim hover:text-noir-white border border-transparent'
+                  }`}
+                >
+                  Temporary
+                </button>
+              </div>
+
               <button
                 onClick={() => setShowR2Library(false)}
                 className="w-7 h-7 rounded-lg border border-noir-border text-noir-ash hover:text-noir-white hover:border-noir-dim flex items-center justify-center text-sm transition-all"
@@ -1473,7 +1567,18 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
 
             {/* Library content */}
             <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
-              <Library onSelectTrack={handleR2TrackSelect} />
+              {libraryMode === 'r2' ? (
+                <Library onSelectTrack={handleR2TrackSelect} />
+              ) : (
+                <LibraryBrowser
+                  isHost={true}
+                  onHostTrack={handleHostLibraryTrack}
+                  onHostTrackList={handleHostLibraryTrackList}
+                  onAddToQueue={handleAddToQueue}
+                  onAddTracksToQueue={handleAddTracksToQueue}
+                  activeTrackId={roomState.libraryTrackId}
+                />
+              )}
             </div>
           </div>
         </div>

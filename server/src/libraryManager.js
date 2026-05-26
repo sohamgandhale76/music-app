@@ -1,7 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { v4: uuidv4 } = require('uuid');
-const musicMetadata = require('music-metadata');
 const logger = require('./logger');
 const telegramBot = require('./telegramBot');
 
@@ -108,9 +106,11 @@ class LibraryManager {
   }
 
   async addTrack(tempFilePath, originalFilename, mimeType, fileSize) {
+    const { v4: uuidv4 } = await import('uuid');
     // 1. Parse metadata and extract tags/art
     let metadata;
     try {
+      const musicMetadata = await import('music-metadata');
       metadata = await musicMetadata.parseFile(tempFilePath);
     } catch (err) {
       logger.warn('Failed to parse audio metadata, using fallbacks', { error: err.message });

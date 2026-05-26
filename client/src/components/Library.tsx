@@ -319,95 +319,40 @@ function UploadSidebar({ onUploaded, isFull }: { onUploaded: () => void; isFull:
   };
 
   // ── Direct-to-R2 XHR PUT helper ──────────────────────────────────────────────
-  const putToR2 = (url: string, file: File, onProgress?: (pct: number) => void): Promise<void> =>
-    new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('PUT', url);
-      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-      xhr.upload.onprogress = (ev) => {
-        if (ev.lengthComputable && onProgress) onProgress(Math.round((ev.loaded / ev.total) * 100));
-      };
-      xhr.onload  = () => xhr.status < 300 ? resolve() : reject(new Error(`R2 PUT ${xhr.status}`));
-      xhr.onerror = () => reject(new Error('Network error uploading to R2'));
-      xhr.send(file);
-    });
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!audioFile) { setError('Please select an audio file.'); return; }
-    setUploading(true); setError(null); setProgress(0); setStatusMsg('Requesting upload URL…');
+    setUploading(true); setError(null); setProgress(1);
 
-    try {
-      // Step 1 — Get presigned PUT URL for the audio file
-      const urlRes = await fetch(
-        `${base}/library/upload-url?filename=${encodeURIComponent(audioFile.name)}&contentType=${encodeURIComponent(audioFile.type || 'audio/mpeg')}&size=${audioFile.size}&kind=audio`,
-      );
-      if (urlRes.status === 507) { setError('Storage full — delete some tracks first.'); setUploading(false); return; }
-      if (!urlRes.ok) {
-        const j = await urlRes.json().catch(() => ({})) as { error?: string };
-        throw new Error(j.error || 'Failed to get upload URL');
+    const form = new FormData();
+    form.append('audio', audioFile);
+    if (coverFile)  form.append('cover', coverFile);
+    if (lyricsFile) form.append('lyrics', lyricsFile);
+    if (title)  form.append('title', title);
+    if (artist) form.append('artist', artist);
+    if (duration !== null) form.append('duration', duration.toString());
+
+    const xhr = new XMLHttpRequest();
+    xhr.timeout = 600_000; // 10 minutes (matches the server timeout)
+    xhr.open('POST', `${base}/library/upload`);
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) setProgress(Math.round((ev.loaded / ev.total) * 100));
+    };
+
+    xhr.onload = () => {
+      setUploading(false);
+      if (xhr.status === 507) { setError('Storage full — delete some tracks first.'); return; }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        try { setError((JSON.parse(xhr.responseText) as { error: string }).error || 'Upload failed'); }
+        catch { setError('Upload failed'); }
+        return;
       }
-      const { uploadUrl, key, id } = await urlRes.json() as { uploadUrl: string; key: string; id: string };
-
-      // Step 2 — PUT audio directly to R2 (shows real progress)
-      setStatusMsg('Uploading to R2…'); setProgress(1);
-      await putToR2(uploadUrl, audioFile, (pct) => setProgress(pct));
-
-      // Step 3 — Optional cover
-      let cover_key: string | null = null;
-      if (coverFile) {
-        setStatusMsg('Uploading cover…');
-        const covRes = await fetch(
-          `${base}/library/upload-url?filename=${encodeURIComponent(coverFile.name)}&contentType=${encodeURIComponent(coverFile.type || 'image/jpeg')}&kind=cover&id=${id}`,
-        );
-        if (covRes.ok) {
-          const { uploadUrl: cu, key: ck } = await covRes.json() as { uploadUrl: string; key: string };
-          await putToR2(cu, coverFile);
-          cover_key = ck;
-        }
-      }
-
-      // Step 4 — Optional lyrics
-      let lyrics_key: string | null = null;
-      if (lyricsFile) {
-        setStatusMsg('Uploading lyrics…');
-        const lrcRes = await fetch(
-          `${base}/library/upload-url?filename=${encodeURIComponent(lyricsFile.name)}&contentType=text/plain&kind=lyrics&id=${id}`,
-        );
-        if (lrcRes.ok) {
-          const { uploadUrl: lu, key: lk } = await lrcRes.json() as { uploadUrl: string; key: string };
-          await putToR2(lu, lyricsFile);
-          lyrics_key = lk;
-        }
-      }
-
-      // Step 5 — Save metadata to PostgreSQL via server
-      setStatusMsg('Saving metadata…');
-      const confirmRes = await fetch(`${base}/library/confirm-upload`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id, key,
-          title: (title || '').trim() || audioFile.name.replace(/\.[^.]+$/, ''),
-          artist: (artist || '').trim() || null,
-          duration,
-          size: audioFile.size,
-          format: audioFile.name.split('.').pop()?.toLowerCase() || 'mp3',
-          cover_key,
-          lyrics_key,
-        }),
-      });
-      if (!confirmRes.ok) {
-        const j = await confirmRes.json().catch(() => ({})) as { error?: string };
-        throw new Error(j.error || 'Failed to save track metadata');
-      }
-
-      setStatusMsg(''); setUploading(false);
       reset(); onUploaded();
-    } catch (err: unknown) {
-      setUploading(false); setStatusMsg('');
-      setError(err instanceof Error ? err.message : 'Upload failed');
-    }
+    };
+    xhr.onerror = () => { setUploading(false); setError('Network error during upload.'); };
+    xhr.ontimeout = () => { setUploading(false); setError('Upload timed out. Try a smaller file or check your connection.'); };
+    xhr.send(form);
   };
 
   const inputStyle: React.CSSProperties = {

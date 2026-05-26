@@ -46,6 +46,21 @@ async function getStreamUrl(key) {
 }
 
 /**
+ * Get an object from R2 with optional HTTP range.
+ * @param {string} key - Object key
+ * @param {string} [range] - Optional Range header (e.g. "bytes=0-1023")
+ * @returns {Promise<any>} S3 getObject response
+ */
+async function getObject(key, range) {
+  const params = { Bucket: BUCKET, Key: key };
+  if (range) {
+    params.Range = range;
+  }
+  const cmd = new GetObjectCommand(params);
+  return s3.send(cmd);
+}
+
+/**
  * Delete an object from R2.
  * @param {string} key - Object key
  */
@@ -116,6 +131,7 @@ async function getUploadUrl(key, contentType, expiresIn = 3600) {
 module.exports = {
   uploadToR2,
   getStreamUrl,
+  getObject,
   getUploadUrl,
   deleteFromR2,
   getTotalStorageUsed,

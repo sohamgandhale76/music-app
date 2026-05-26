@@ -341,8 +341,35 @@ app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:
       const r2Track = await db.getTrack(id);
       if (r2Track) {
         const r2 = require('./r2');
-        const url = await r2.getStreamUrl(r2Track.audio_key);
-        return res.redirect(url);
+        try {
+          const range = req.headers.range;
+          const r2Response = await r2.getObject(r2Track.audio_key, range);
+          
+          if (range && r2Response.ContentRange) {
+            res.status(206);
+            res.setHeader('Content-Range', r2Response.ContentRange);
+          } else {
+            res.status(200);
+          }
+          
+          if (r2Response.ContentType) {
+            res.setHeader('Content-Type', r2Response.ContentType);
+          } else {
+            res.setHeader('Content-Type', r2Track.format === 'flac' ? 'audio/flac' : 'audio/mpeg');
+          }
+          
+          if (r2Response.ContentLength !== undefined) {
+            res.setHeader('Content-Length', r2Response.ContentLength);
+          }
+          
+          res.setHeader('Accept-Ranges', 'bytes');
+          
+          r2Response.Body.pipe(res);
+          return;
+        } catch (err) {
+          logger.error('Failed to stream R2 track for download', { id, error: err.message });
+          return res.status(500).json({ error: 'Failed to stream track from R2' });
+        }
       }
     } catch (err) {
       logger.error('Failed to look up R2 track for download', { id, error: err.message });
