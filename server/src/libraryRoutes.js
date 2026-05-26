@@ -97,14 +97,24 @@ router.get('/storage', async (_req, res) => {
 // Accepts: audio (required), cover (optional), lyrics (optional)
 // Body fields: title, artist, duration
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Extend socket timeouts to 5 minutes for large file uploads (avoids Render's 30s default)
+const uploadTimeout = (req, res, next) => {
+  req.setTimeout(300_000); // 5 minutes
+  res.setTimeout(300_000);
+  next();
+};
+
 router.post(
   '/upload',
+  uploadTimeout,
   upload.fields([
     { name: 'audio',  maxCount: 1 },
     { name: 'cover',  maxCount: 1 },
     { name: 'lyrics', maxCount: 1 },
   ]),
   async (req, res) => {
+    console.log('[library/upload] files received:', req.files, 'body:', req.body);
     const audio  = req.files?.audio?.[0];
     const cover  = req.files?.cover?.[0];
     const lyrics = req.files?.lyrics?.[0];

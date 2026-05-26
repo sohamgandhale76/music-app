@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, DragEvent } from 'react';
 import { SERVER_URL } from '../lib/constants';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -26,25 +26,11 @@ interface StorageStats {
 }
 
 interface LibraryProps {
-  /** When provided, Library runs in "host picker" mode — clicking Play calls this instead of local playback */
   onSelectTrack?: (track: R2Track, signedUrl: string) => void;
   onLoadToRoom?: (track: R2Track, signedUrl: string) => void;
 }
 
-interface TrackCardProps {
-  track: R2Track;
-  onDelete: (id: string) => void;
-  onPlay: (track: R2Track) => void;
-  isPlaying: boolean;
-  isLoading: boolean;
-}
-
-interface UploadFormProps {
-  onUploaded: () => void;
-  isFull: boolean;
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtBytes(bytes: number | null): string {
   if (!bytes) return '0 B';
@@ -62,163 +48,8 @@ function fmtDuration(secs: number | null): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function formatBadge(format: string | null) {
-  const f = (format || 'mp3').toUpperCase();
-  const colors: Record<string, string> = {
-    FLAC: 'border-green-700/50 bg-green-950/30 text-green-400',
-    WAV:  'border-blue-700/50  bg-blue-950/30  text-blue-400',
-    OGG:  'border-purple-700/50 bg-purple-950/30 text-purple-400',
-    MP3:  'border-yellow-700/50 bg-yellow-950/30 text-yellow-400',
-    M4A:  'border-orange-700/50 bg-orange-950/30 text-orange-400',
-  };
-  const cls = colors[f] ?? 'border-noir-border bg-noir-graphite text-noir-ash';
-  return (
-    <span className={`font-mono text-[9px] px-1.5 py-0.5 rounded border ${cls} uppercase tracking-wider`}>
-      {f}
-    </span>
-  );
-}
-
-// ─── StorageBar ───────────────────────────────────────────────────────────────
-
-function StorageBar({ storage }: { storage: StorageStats | null }) {
-  if (!storage) return null;
-  const pct = parseFloat(storage.percentUsed) || 0;
-  const isFull = storage.isFull;
-  const isWarn = pct >= 90 && !isFull;
-
-  const barColor = isFull
-    ? 'bg-red-500'
-    : isWarn
-    ? 'bg-amber-400'
-    : 'bg-gradient-to-r from-[#c8a96e] to-[#d4882a]';
-
-  const textColor = isFull ? 'text-red-400' : isWarn ? 'text-amber-400' : 'text-[#c8a96e]';
-
-  return (
-    <div className="rounded-xl border border-noir-border/40 bg-noir-charcoal/60 backdrop-blur-sm p-4 space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="font-mono text-[10px] tracking-[0.2em] text-noir-ash uppercase">R2 Storage</span>
-        <span className={`font-mono text-[11px] font-semibold ${textColor}`}>
-          {storage.usedGB} / {storage.limitGB} GB
-          <span className="text-noir-dim ml-1">({storage.percentUsed}%)</span>
-        </span>
-      </div>
-      <div className="h-1.5 rounded-full bg-noir-graphite overflow-hidden">
-        <div
-          className={`h-full rounded-full transition-all duration-700 ${barColor}`}
-          style={{ width: `${Math.min(pct, 100)}%` }}
-        />
-      </div>
-      {isFull && (
-        <p className="font-mono text-[10px] text-red-400">
-          ⚠ Library full — delete tracks to free space
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ─── TrackCard ────────────────────────────────────────────────────────────────
-
-function TrackCard({ track, onDelete, onPlay, isPlaying, isLoading }: TrackCardProps) {
-  const base = SERVER_URL || '';
-  const coverUrl = track.cover_key ? `${base}/library/${track.id}/cover` : null;
-
-  return (
-    <div
-      className={`
-        relative flex gap-3 p-3.5 rounded-xl border transition-all duration-300 group
-        ${isPlaying
-          ? 'border-[#c8a96e]/60 bg-[#c8a96e]/[0.06] shadow-[0_0_24px_rgba(200,169,110,0.15)]'
-          : 'border-noir-border/40 bg-noir-charcoal/50 hover:border-noir-border hover:bg-noir-charcoal/80'
-        }
-      `}
-    >
-      {/* Cover art */}
-      <div className="w-14 h-14 rounded-lg overflow-hidden bg-noir-graphite flex-shrink-0 flex items-center justify-center border border-noir-border/40 relative">
-        {coverUrl ? (
-          <img
-            src={coverUrl}
-            alt="Cover"
-            className="w-full h-full object-cover"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-          />
-        ) : (
-          <span className="text-2xl opacity-25">🎵</span>
-        )}
-        {isPlaying && (
-          <div className="absolute inset-0 bg-[#c8a96e]/10 flex items-center justify-center">
-            <span className="text-xs animate-pulse">▶</span>
-          </div>
-        )}
-      </div>
-
-      {/* Metadata */}
-      <div className="flex-1 min-w-0 flex flex-col justify-between">
-        <div>
-          <p className="font-mono text-sm text-noir-white truncate leading-tight" title={track.title}>
-            {track.title}
-          </p>
-          <p className="font-mono text-[11px] text-noir-ash truncate mt-0.5">
-            {track.artist || 'Unknown Artist'}
-          </p>
-        </div>
-        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-          {formatBadge(track.format)}
-          {track.lyrics_key && (
-            <span className="font-mono text-[9px] px-1.5 py-0.5 rounded border border-[#c8a96e]/40 bg-[#c8a96e]/10 text-[#c8a96e] uppercase tracking-wider">
-              📝 LRC
-            </span>
-          )}
-          <span className="font-mono text-[10px] text-noir-dim">{fmtDuration(track.duration)}</span>
-          <span className="font-mono text-[10px] text-noir-dim">{fmtBytes(track.size)}</span>
-        </div>
-      </div>
-
-      {/* Actions */}
-      <div className="flex flex-col gap-1.5 justify-center shrink-0">
-        <button
-          onClick={() => !isLoading && onPlay(track)}
-          disabled={isLoading}
-          className={`
-            w-8 h-8 rounded-lg border flex items-center justify-center text-sm
-            transition-all hover:scale-105 active:scale-95
-            ${isLoading
-              ? 'border-[#c8a96e]/30 text-noir-dim cursor-not-allowed'
-              : isPlaying
-              ? 'border-[#c8a96e]/60 bg-[#c8a96e]/20 text-[#c8a96e]'
-              : 'border-noir-border text-noir-ash hover:border-[#c8a96e]/40 hover:text-[#c8a96e] hover:bg-[#c8a96e]/5'
-            }
-          `}
-          title={isLoading ? 'Loading...' : isPlaying ? 'Playing' : 'Play'}
-        >
-          {isLoading ? (
-            <div className="w-3.5 h-3.5 border-2 border-[#c8a96e] border-t-transparent rounded-full animate-spin" />
-          ) : isPlaying ? (
-            '⏸'
-          ) : (
-            '▶'
-          )}
-        </button>
-        <button
-          onClick={() => onDelete(track.id)}
-          className="w-8 h-8 rounded-lg border border-red-900/40 text-red-500/60 flex items-center justify-center text-xs transition-all hover:border-red-500/50 hover:text-red-400 hover:bg-red-950/20 active:scale-95"
-          title="Delete from library"
-        >
-          🗑
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// Helper functions for parsing filename metadata
 function titleCase(str: string): string {
-  return str
-    .split(/\s+/)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ');
+  return str.split(/\s+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 }
 
 function parseFilename(filename: string): { title: string; artist: string } {
@@ -230,57 +61,247 @@ function parseFilename(filename: string): { title: string; artist: string } {
     const parts = nameWithoutExt.split(' - ');
     artist = parts[0].trim();
     title = parts.slice(1).join(' - ').trim();
-  } else if (nameWithoutExt.includes(' -')) {
-    const parts = nameWithoutExt.split(' -');
-    artist = parts[0].trim();
-    title = parts.slice(1).join(' -').trim();
-  } else if (nameWithoutExt.includes('- ')) {
-    const parts = nameWithoutExt.split('- ');
-    artist = parts[0].trim();
-    title = parts.slice(1).join('- ').trim();
   } else if (nameWithoutExt.includes('_')) {
     const parts = nameWithoutExt.split('_');
-    if (parts.length === 2) {
-      artist = parts[0].trim();
-      title = parts[1].trim();
-    }
+    if (parts.length === 2) { artist = parts[0].trim(); title = parts[1].trim(); }
   }
-
-  const cleanTitle = title.replace(/[-_]/g, ' ').trim();
-  const cleanArtist = artist.replace(/[-_]/g, ' ').trim();
-
   return {
-    title: titleCase(cleanTitle),
-    artist: cleanArtist ? titleCase(cleanArtist) : '',
+    title: titleCase(title.replace(/[-_]/g, ' ').trim()),
+    artist: artist ? titleCase(artist.replace(/[-_]/g, ' ').trim()) : '',
   };
 }
 
-// ─── UploadForm ───────────────────────────────────────────────────────────────
+// ─── Format Badge ─────────────────────────────────────────────────────────────
 
-function UploadForm({ onUploaded, isFull }: UploadFormProps) {
-  const [audioFile, setAudioFile]   = useState<File | null>(null);
-  const [coverFile, setCoverFile]   = useState<File | null>(null);
+function FormatBadge({ format }: { format: string | null }) {
+  const f = (format || 'mp3').toUpperCase();
+  const map: Record<string, { bg: string; text: string; border: string }> = {
+    FLAC: { bg: 'rgba(16,185,129,0.08)', text: '#34d399', border: 'rgba(16,185,129,0.3)' },
+    WAV:  { bg: 'rgba(59,130,246,0.08)',  text: '#60a5fa', border: 'rgba(59,130,246,0.3)' },
+    OGG:  { bg: 'rgba(168,85,247,0.08)', text: '#c084fc', border: 'rgba(168,85,247,0.3)' },
+    MP3:  { bg: 'rgba(200,169,110,0.08)', text: '#c8a96e', border: 'rgba(200,169,110,0.3)' },
+    M4A:  { bg: 'rgba(251,146,60,0.08)', text: '#fb923c', border: 'rgba(251,146,60,0.3)' },
+  };
+  const c = map[f] ?? { bg: 'rgba(255,255,255,0.04)', text: '#888', border: 'rgba(255,255,255,0.1)' };
+  return (
+    <span style={{
+      background: c.bg, color: c.text, border: `1px solid ${c.border}`,
+      fontFamily: 'monospace', fontSize: '9px', padding: '2px 6px',
+      borderRadius: '4px', letterSpacing: '0.12em', textTransform: 'uppercase',
+      fontWeight: 600, lineHeight: 1,
+    }}>
+      {f}
+    </span>
+  );
+}
+
+// ─── Storage Bar ──────────────────────────────────────────────────────────────
+
+function StorageBar({ storage }: { storage: StorageStats | null }) {
+  if (!storage) return null;
+  const pct = Math.min(parseFloat(storage.percentUsed) || 0, 100);
+  const isFull = storage.isFull;
+  const isWarn = pct >= 90 && !isFull;
+  const barGrad = isFull
+    ? 'linear-gradient(90deg,#ef4444,#b91c1c)'
+    : isWarn
+    ? 'linear-gradient(90deg,#f59e0b,#d97706)'
+    : 'linear-gradient(90deg,#c8a96e,#d4882a)';
+  const textColor = isFull ? '#f87171' : isWarn ? '#fbbf24' : '#c8a96e';
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: '12px',
+      padding: '10px 18px',
+      background: 'rgba(255,255,255,0.02)',
+      borderBottom: '1px solid rgba(255,255,255,0.05)',
+    }}>
+      <span style={{ fontFamily: 'monospace', fontSize: '9px', color: '#555', letterSpacing: '0.15em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+        R2 Storage
+      </span>
+      <div style={{ flex: 1, height: '3px', borderRadius: '2px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', borderRadius: '2px', background: barGrad, transition: 'width 0.7s ease' }} />
+      </div>
+      <span style={{ fontFamily: 'monospace', fontSize: '10px', color: textColor, whiteSpace: 'nowrap', fontWeight: 600 }}>
+        {storage.usedGB} <span style={{ color: '#444', fontWeight: 400 }}>/ {storage.limitGB} GB</span>
+      </span>
+    </div>
+  );
+}
+
+// ─── Track Card ───────────────────────────────────────────────────────────────
+
+function TrackCard({
+  track, onDelete, onPlay, isPlaying, isLoading,
+}: {
+  track: R2Track;
+  onDelete: (id: string) => void;
+  onPlay: (track: R2Track) => void;
+  isPlaying: boolean;
+  isLoading: boolean;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const base = SERVER_URL || '';
+  const coverUrl = track.cover_key ? `${base}/library/${track.id}/cover` : null;
+  const active = isPlaying || hovered;
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '12px',
+        padding: '10px 14px',
+        borderRadius: '10px',
+        border: isPlaying
+          ? '1px solid rgba(200,169,110,0.4)'
+          : `1px solid ${hovered ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)'}`,
+        background: isPlaying
+          ? 'rgba(200,169,110,0.05)'
+          : hovered ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.01)',
+        transition: 'all 0.2s ease',
+        cursor: 'default',
+        boxShadow: isPlaying ? '0 0 20px rgba(200,169,110,0.08)' : 'none',
+      }}
+    >
+      {/* Cover */}
+      <div style={{
+        width: '44px', height: '44px', borderRadius: '7px', flexShrink: 0,
+        background: 'rgba(255,255,255,0.04)', overflow: 'hidden',
+        border: '1px solid rgba(255,255,255,0.06)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        position: 'relative',
+      }}>
+        {coverUrl ? (
+          <img src={coverUrl} alt="cover" style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+        ) : (
+          <span style={{ fontSize: '18px', opacity: 0.15 }}>♪</span>
+        )}
+        {isPlaying && (
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: 'rgba(200,169,110,0.15)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <NowPlayingBars />
+          </div>
+        )}
+      </div>
+
+      {/* Metadata */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{
+          fontFamily: 'monospace', fontSize: '12px', color: '#e8e8e8',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          marginBottom: '3px', fontWeight: isPlaying ? 600 : 400,
+        }} title={track.title}>{track.title}</p>
+        <p style={{
+          fontFamily: 'monospace', fontSize: '10px', color: '#555',
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          marginBottom: '5px',
+        }}>{track.artist || 'Unknown Artist'}</p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+          <FormatBadge format={track.format} />
+          {track.lyrics_key && (
+            <span style={{
+              fontFamily: 'monospace', fontSize: '9px', padding: '2px 5px',
+              border: '1px solid rgba(200,169,110,0.25)', borderRadius: '4px',
+              color: '#c8a96e', background: 'rgba(200,169,110,0.06)',
+              letterSpacing: '0.1em', textTransform: 'uppercase',
+            }}>LRC</span>
+          )}
+          <span style={{ fontFamily: 'monospace', fontSize: '9px', color: '#444' }}>
+            {fmtDuration(track.duration)}
+          </span>
+          <span style={{ fontFamily: 'monospace', fontSize: '9px', color: '#333' }}>
+            {fmtBytes(track.size)}
+          </span>
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: 'flex', gap: '6px', opacity: active ? 1 : 0, transition: 'opacity 0.2s' }}>
+        <button
+          onClick={() => !isLoading && onPlay(track)}
+          disabled={isLoading}
+          title={isLoading ? 'Loading…' : isPlaying ? 'Playing' : 'Load to Room'}
+          style={{
+            width: '32px', height: '32px', borderRadius: '8px',
+            border: isPlaying ? '1px solid rgba(200,169,110,0.5)' : '1px solid rgba(255,255,255,0.1)',
+            background: isPlaying ? 'rgba(200,169,110,0.15)' : 'rgba(255,255,255,0.04)',
+            color: isPlaying ? '#c8a96e' : '#aaa',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: isLoading ? 'not-allowed' : 'pointer',
+            transition: 'all 0.2s', fontSize: '13px',
+          }}
+          onMouseEnter={(e) => { if (!isLoading && !isPlaying) { (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(200,169,110,0.4)'; (e.currentTarget as HTMLButtonElement).style.color = '#c8a96e'; } }}
+          onMouseLeave={(e) => { if (!isLoading && !isPlaying) { (e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(255,255,255,0.1)'; (e.currentTarget as HTMLButtonElement).style.color = '#aaa'; } }}
+        >
+          {isLoading ? (
+            <div style={{ width: '12px', height: '12px', border: '2px solid #c8a96e', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+          ) : isPlaying ? '⏸' : '▶'}
+        </button>
+        <button
+          onClick={() => onDelete(track.id)}
+          title="Delete"
+          style={{
+            width: '32px', height: '32px', borderRadius: '8px',
+            border: '1px solid rgba(255,60,60,0.15)', background: 'rgba(255,60,60,0.03)',
+            color: 'rgba(248,113,113,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'pointer', transition: 'all 0.2s', fontSize: '12px',
+          }}
+          onMouseEnter={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.borderColor = 'rgba(248,113,113,0.4)'; b.style.color = '#f87171'; b.style.background = 'rgba(248,113,113,0.06)'; }}
+          onMouseLeave={(e) => { const b = e.currentTarget as HTMLButtonElement; b.style.borderColor = 'rgba(255,60,60,0.15)'; b.style.color = 'rgba(248,113,113,0.5)'; b.style.background = 'rgba(255,60,60,0.03)'; }}
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Now Playing Animated Bars ────────────────────────────────────────────────
+
+function NowPlayingBars() {
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: '2px', height: '14px' }}>
+      {[1, 2, 3].map((i) => (
+        <div key={i} style={{
+          width: '3px', borderRadius: '1px', background: '#c8a96e',
+          animation: `nowplaying ${0.6 + i * 0.15}s ease-in-out infinite alternate`,
+          height: `${40 + i * 20}%`,
+        }} />
+      ))}
+    </div>
+  );
+}
+
+// ─── Upload Form (sidebar) ────────────────────────────────────────────────────
+
+function UploadSidebar({ onUploaded, isFull }: { onUploaded: () => void; isFull: boolean }) {
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
   const [lyricsFile, setLyricsFile] = useState<File | null>(null);
-  const [title, setTitle]           = useState('');
-  const [artist, setArtist]         = useState('');
-  const [duration, setDuration]     = useState<number | null>(null);
-  const [progress, setProgress]     = useState(0);
-  const [uploading, setUploading]   = useState(false);
-  const [error, setError]           = useState<string | null>(null);
+  const [title, setTitle] = useState('');
+  const [artist, setArtist] = useState('');
+  const [duration, setDuration] = useState<number | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const xhrRef = useRef<XMLHttpRequest | null>(null);
 
   const reset = () => {
     setAudioFile(null); setCoverFile(null); setLyricsFile(null);
-    setTitle(''); setArtist(''); setDuration(null); setProgress(0); setError(null);
+    setTitle(''); setArtist(''); setDuration(null);
+    setProgress(0); setError(null);
   };
 
   const handleAudioSelect = (file: File) => {
     setAudioFile(file);
-    const { title: parsedTitle, artist: parsedArtist } = parseFilename(file.name);
-    setTitle(parsedTitle);
-    setArtist(parsedArtist);
-
-    // Extract duration using HTML5 Audio
+    const { title: pt, artist: pa } = parseFilename(file.name);
+    setTitle(pt); setArtist(pa);
     const audio = new Audio();
     audio.src = URL.createObjectURL(file);
     audio.addEventListener('loadedmetadata', () => {
@@ -289,21 +310,28 @@ function UploadForm({ onUploaded, isFull }: UploadFormProps) {
     });
   };
 
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault(); setDragOver(false);
+    const f = e.dataTransfer.files[0];
+    if (f && f.type.startsWith('audio/')) handleAudioSelect(f);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!audioFile) { setError('Please select an audio file.'); return; }
-    setUploading(true); setError(null); setProgress(0);
+    setUploading(true); setError(null); setProgress(1);
 
     const form = new FormData();
-    form.append('audio',  audioFile);
-    if (coverFile)  form.append('cover',  coverFile);
+    form.append('audio', audioFile);
+    if (coverFile)  form.append('cover', coverFile);
     if (lyricsFile) form.append('lyrics', lyricsFile);
-    if (title)  form.append('title',  title);
+    if (title)  form.append('title', title);
     if (artist) form.append('artist', artist);
     if (duration !== null) form.append('duration', duration.toString());
 
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
+    xhr.timeout = 300_000; // 5 minutes
     xhr.open('POST', `${SERVER_URL || ''}/library/upload`);
 
     xhr.upload.onprogress = (ev) => {
@@ -312,146 +340,192 @@ function UploadForm({ onUploaded, isFull }: UploadFormProps) {
 
     xhr.onload = () => {
       setUploading(false);
-      if (xhr.status === 507) {
-        setError('Storage full — delete some tracks first.');
-        return;
-      }
+      if (xhr.status === 507) { setError('Storage full — delete some tracks first.'); return; }
       if (xhr.status < 200 || xhr.status >= 300) {
         try { setError((JSON.parse(xhr.responseText) as { error: string }).error || 'Upload failed'); }
         catch { setError('Upload failed'); }
         return;
       }
-      reset();
-      onUploaded();
+      reset(); onUploaded();
     };
     xhr.onerror = () => { setUploading(false); setError('Network error during upload.'); };
+    xhr.ontimeout = () => { setUploading(false); setError('Upload timed out. Try a smaller file or check your connection.'); };
     xhr.send(form);
   };
 
-  return (
-    <form onSubmit={handleSubmit} className="space-y-3 rounded-xl border border-noir-border/40 bg-noir-charcoal/40 backdrop-blur-sm p-4">
-      <p className="font-mono text-[10px] tracking-[0.2em] uppercase text-noir-ash mb-2">Upload to R2 Library</p>
+  const inputStyle: React.CSSProperties = {
+    width: '100%', boxSizing: 'border-box',
+    background: 'rgba(255,255,255,0.03)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    color: '#e0e0e0', padding: '8px 10px',
+    borderRadius: '7px', fontFamily: 'monospace', fontSize: '11px',
+    outline: 'none', transition: 'border-color 0.2s',
+  };
 
-      {/* Audio file — required */}
-      <label className="block">
-        <span className="font-mono text-[10px] text-noir-dim mb-1 block">Audio File *</span>
-        <div className={`
-          relative border border-dashed rounded-lg p-3 text-center cursor-pointer transition-all
-          ${audioFile ? 'border-[#c8a96e]/50 bg-[#c8a96e]/5' : 'border-noir-border hover:border-[#c8a96e]/30'}
-        `}>
-          <input
-            type="file"
-            accept="audio/mp3,audio/mpeg,audio/wav,audio/flac,audio/ogg,audio/*"
-            className="absolute inset-0 opacity-0 cursor-pointer"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) handleAudioSelect(f);
-            }}
-          />
-          <p className="font-mono text-xs text-noir-ash">
-            {audioFile ? `✓ ${audioFile.name}` : '🎵 MP3 / WAV / FLAC / OGG'}
-          </p>
-        </div>
-      </label>
+  const labelStyle: React.CSSProperties = {
+    fontFamily: 'monospace', fontSize: '9px', color: '#444',
+    letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: '5px', display: 'block',
+  };
+
+  return (
+    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+
+      {/* Drag-and-drop zone */}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        onClick={() => document.getElementById('lib-audio-input')?.click()}
+        style={{
+          position: 'relative', cursor: 'pointer',
+          border: `1px dashed ${audioFile ? 'rgba(200,169,110,0.5)' : dragOver ? 'rgba(200,169,110,0.7)' : 'rgba(255,255,255,0.1)'}`,
+          borderRadius: '10px', padding: '20px 12px', textAlign: 'center',
+          background: audioFile
+            ? 'rgba(200,169,110,0.04)'
+            : dragOver ? 'rgba(200,169,110,0.06)' : 'rgba(255,255,255,0.01)',
+          transition: 'all 0.2s',
+          boxShadow: dragOver ? '0 0 20px rgba(200,169,110,0.1)' : 'none',
+        }}
+      >
+        <input
+          id="lib-audio-input"
+          type="file"
+          accept="audio/*"
+          style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', pointerEvents: 'none' }}
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleAudioSelect(f); }}
+        />
+        {audioFile ? (
+          <>
+            <div style={{ fontSize: '22px', marginBottom: '6px' }}>🎵</div>
+            <p style={{ fontFamily: 'monospace', fontSize: '11px', color: '#c8a96e', marginBottom: '2px' }}>
+              {audioFile.name.length > 28 ? audioFile.name.slice(0, 28) + '…' : audioFile.name}
+            </p>
+            <p style={{ fontFamily: 'monospace', fontSize: '9px', color: '#555' }}>
+              {fmtBytes(audioFile.size)}{duration ? ` · ${fmtDuration(duration)}` : ''}
+            </p>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: '28px', marginBottom: '8px', opacity: 0.3 }}>⬆</div>
+            <p style={{ fontFamily: 'monospace', fontSize: '11px', color: '#555', marginBottom: '3px' }}>
+              Drop audio here
+            </p>
+            <p style={{ fontFamily: 'monospace', fontSize: '9px', color: '#333', letterSpacing: '0.1em' }}>
+              MP3 · WAV · FLAC · OGG
+            </p>
+          </>
+        )}
+      </div>
 
       {/* Title & Artist */}
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <span className="font-mono text-[10px] text-noir-dim mb-1 block">Title</span>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="Track title..."
-            className="w-full bg-noir-graphite border border-noir-border text-noir-white px-3 py-1.5 rounded-lg font-mono text-xs focus:outline-none focus:border-[#c8a96e]/50 transition-all placeholder:text-noir-dim"
-          />
-        </div>
-        <div>
-          <span className="font-mono text-[10px] text-noir-dim mb-1 block">Artist</span>
-          <input
-            type="text"
-            value={artist}
-            onChange={(e) => setArtist(e.target.value)}
-            placeholder="Artist name..."
-            className="w-full bg-noir-graphite border border-noir-border text-noir-white px-3 py-1.5 rounded-lg font-mono text-xs focus:outline-none focus:border-[#c8a96e]/50 transition-all placeholder:text-noir-dim"
-          />
-        </div>
+      <div>
+        <span style={labelStyle}>Title</span>
+        <input type="text" value={title} onChange={(e) => setTitle(e.target.value)}
+          placeholder="Track title…" style={inputStyle}
+          onFocus={(e) => { (e.target as HTMLInputElement).style.borderColor = 'rgba(200,169,110,0.4)'; }}
+          onBlur={(e) => { (e.target as HTMLInputElement).style.borderColor = 'rgba(255,255,255,0.08)'; }}
+        />
+      </div>
+      <div>
+        <span style={labelStyle}>Artist</span>
+        <input type="text" value={artist} onChange={(e) => setArtist(e.target.value)}
+          placeholder="Artist name…" style={inputStyle}
+          onFocus={(e) => { (e.target as HTMLInputElement).style.borderColor = 'rgba(200,169,110,0.4)'; }}
+          onBlur={(e) => { (e.target as HTMLInputElement).style.borderColor = 'rgba(255,255,255,0.08)'; }}
+        />
       </div>
 
       {/* Optional files */}
-      <div className="grid grid-cols-2 gap-2">
-        <label className="block">
-          <span className="font-mono text-[10px] text-noir-dim mb-1 block">Cover Image (optional)</span>
-          <div className={`relative border border-dashed rounded-lg px-2 py-2 text-center cursor-pointer transition-all ${coverFile ? 'border-blue-500/40 bg-blue-950/10' : 'border-noir-border hover:border-blue-500/20'}`}>
-            <input type="file" accept="image/*" className="absolute inset-0 opacity-0 cursor-pointer"
-              onChange={(e) => setCoverFile(e.target.files?.[0] ?? null)} />
-            <p className="font-mono text-[10px] text-noir-dim">{coverFile ? `✓ ${coverFile.name.slice(0,20)}` : '🖼 Image...'}</p>
-          </div>
-        </label>
-        <label className="block">
-          <span className="font-mono text-[10px] text-noir-dim mb-1 block">Lyrics .lrc (optional)</span>
-          <div className={`relative border border-dashed rounded-lg px-2 py-2 text-center cursor-pointer transition-all ${lyricsFile ? 'border-[#c8a96e]/40 bg-[#c8a96e]/5' : 'border-noir-border hover:border-[#c8a96e]/20'}`}>
-            <input type="file" accept=".lrc" className="absolute inset-0 opacity-0 cursor-pointer"
-              onChange={(e) => setLyricsFile(e.target.files?.[0] ?? null)} />
-            <p className="font-mono text-[10px] text-noir-dim">{lyricsFile ? `✓ ${lyricsFile.name.slice(0,20)}` : '📝 .lrc file...'}</p>
-          </div>
-        </label>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+        {[
+          { label: 'Cover Art', accept: 'image/*', file: coverFile, setter: setCoverFile, emoji: '🖼' },
+          { label: 'Lyrics .lrc', accept: '.lrc', file: lyricsFile, setter: setLyricsFile, emoji: '📝' },
+        ].map(({ label, accept, file, setter, emoji }) => (
+          <label key={label} style={{ cursor: 'pointer' }}>
+            <span style={labelStyle}>{label}</span>
+            <div style={{
+              position: 'relative', border: `1px dashed ${file ? 'rgba(200,169,110,0.35)' : 'rgba(255,255,255,0.06)'}`,
+              borderRadius: '7px', padding: '8px 6px', textAlign: 'center',
+              background: file ? 'rgba(200,169,110,0.03)' : 'transparent', transition: 'all 0.2s',
+            }}>
+              <input type="file" accept={accept} style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer' }}
+                onChange={(e) => setter(e.target.files?.[0] ?? null)} />
+              <p style={{ fontFamily: 'monospace', fontSize: '9px', color: file ? '#c8a96e' : '#333' }}>
+                {file ? file.name.slice(0, 14) + (file.name.length > 14 ? '…' : '') : `${emoji} optional`}
+              </p>
+            </div>
+          </label>
+        ))}
       </div>
 
-      {/* Progress */}
-      {uploading && (
-        <div className="space-y-1">
-          <div className="h-1 rounded-full bg-noir-graphite overflow-hidden">
-            <div
-              className="h-full rounded-full bg-gradient-to-r from-[#c8a96e] to-[#d4882a] transition-all duration-300"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <p className="font-mono text-[10px] text-[#c8a96e]">Uploading… {progress}%</p>
+      {/* Error */}
+      {error && (
+        <div style={{
+          padding: '8px 10px', borderRadius: '7px',
+          background: 'rgba(248,113,113,0.05)',
+          border: '1px solid rgba(248,113,113,0.2)',
+          fontFamily: 'monospace', fontSize: '10px', color: '#f87171',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <span>{error}</span>
+          <button type="button" onClick={() => setError(null)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', opacity: 0.6, fontSize: '12px' }}>✕</button>
         </div>
       )}
 
-      {error && (
-        <p className="font-mono text-[11px] text-red-400 bg-red-950/20 border border-red-900/30 rounded-lg px-3 py-2">
-          {error}
-        </p>
-      )}
-
+      {/* Upload button with integrated progress */}
       <button
         type="submit"
         disabled={uploading || isFull || !audioFile}
-        className="
-          w-full py-2 px-4 rounded-lg font-mono text-xs font-semibold uppercase tracking-wider
-          transition-all duration-200 active:scale-[0.98]
-          bg-gradient-to-r from-[#c8a96e] to-[#d4882a] text-[#0a0a0a]
-          hover:brightness-110 hover:shadow-[0_0_20px_rgba(200,169,110,0.3)]
-          disabled:opacity-40 disabled:cursor-not-allowed disabled:brightness-100
-        "
+        style={{
+          position: 'relative', overflow: 'hidden',
+          width: '100%', padding: '11px 16px',
+          borderRadius: '8px', border: 'none', cursor: 'pointer',
+          fontFamily: 'monospace', fontSize: '11px', fontWeight: 700,
+          letterSpacing: '0.15em', textTransform: 'uppercase',
+          color: uploading || isFull || !audioFile ? 'rgba(10,10,15,0.5)' : '#0a0a0f',
+          background: uploading || isFull || !audioFile
+            ? 'rgba(200,169,110,0.25)'
+            : 'linear-gradient(135deg,#c8a96e,#d4882a)',
+          transition: 'all 0.2s',
+          boxShadow: uploading || isFull || !audioFile
+            ? 'none'
+            : '0 4px 20px rgba(200,169,110,0.25)',
+        }}
       >
-        {uploading ? `Uploading ${progress}%…` : isFull ? 'Storage Full' : '📤 Upload to Library'}
+        {/* Progress fill behind button text */}
+        {uploading && (
+          <div style={{
+            position: 'absolute', left: 0, top: 0, bottom: 0,
+            width: `${progress}%`, transition: 'width 0.3s ease',
+            background: 'rgba(200,169,110,0.3)', borderRadius: '8px',
+          }} />
+        )}
+        <span style={{ position: 'relative', zIndex: 1 }}>
+          {uploading ? `Uploading… ${progress}%` : isFull ? 'Storage Full' : audioFile ? '⬆  Upload Track' : 'Select a File First'}
+        </span>
       </button>
+
+      {audioFile && !uploading && (
+        <button type="button" onClick={reset} style={{
+          background: 'none', border: 'none', cursor: 'pointer', color: '#444',
+          fontFamily: 'monospace', fontSize: '9px', letterSpacing: '0.1em',
+          textDecoration: 'underline', textAlign: 'center',
+        }}>clear selection</button>
+      )}
     </form>
   );
 }
 
 // ─── Main Library Component ───────────────────────────────────────────────────
 
-/**
- * Library — Self-contained R2 music library component.
- *
- * Props:
- *   onSelectTrack(track, signedUrl) — called when host picks a track to play in the room.
- *                                     If not provided, the component is in standalone mode.
- */
 export function Library({ onSelectTrack, onLoadToRoom }: LibraryProps) {
-  const [tracks, setTracks]         = useState<R2Track[]>([]);
-  const [storage, setStorage]       = useState<StorageStats | null>(null);
-  const [loading, setLoading]       = useState(true);
-  const [error, setError]           = useState<string | null>(null);
-  const [search, setSearch]         = useState('');
-  const [playingId, setPlayingId]   = useState<string | null>(null);
+  const [tracks, setTracks] = useState<R2Track[]>([]);
+  const [storage, setStorage] = useState<StorageStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [playingId, setPlayingId] = useState<string | null>(null);
   const [loadingTrackId, setLoadingTrackId] = useState<string | null>(null);
-  const [showUpload, setShowUpload] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const base = SERVER_URL || '';
 
@@ -461,13 +535,9 @@ export function Library({ onSelectTrack, onLoadToRoom }: LibraryProps) {
       const res = await fetch(`${base}/library?t=${Date.now()}`);
       if (!res.ok) throw new Error('Failed to load R2 library');
       const data = await res.json();
-      console.log('GET /library response:', data);
-
-      // Handle both direct array responses and wrapped objects like { tracks: [...] }
-      const tracksArray = Array.isArray(data) ? data : (data && data.tracks ? data.tracks : []);
+      const tracksArray = Array.isArray(data) ? data : (data?.tracks ?? []);
       setTracks(tracksArray);
     } catch (err: unknown) {
-      console.error('Error fetching tracks:', err);
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
@@ -477,20 +547,11 @@ export function Library({ onSelectTrack, onLoadToRoom }: LibraryProps) {
   const fetchStorage = useCallback(async () => {
     try {
       const res = await fetch(`${base}/library/storage?t=${Date.now()}`);
-      if (res.ok) {
-        const data = await res.json();
-        console.log('GET /library/storage response:', data);
-        setStorage(data as StorageStats);
-      }
-    } catch (err) {
-      console.error('Error fetching storage stats:', err);
-    }
+      if (res.ok) setStorage(await res.json() as StorageStats);
+    } catch { /* non-fatal */ }
   }, [base]);
 
-  useEffect(() => {
-    fetchTracks();
-    fetchStorage();
-  }, [fetchTracks, fetchStorage]);
+  useEffect(() => { fetchTracks(); fetchStorage(); }, [fetchTracks, fetchStorage]);
 
   const handlePlay = useCallback(async (track: R2Track) => {
     try {
@@ -498,30 +559,19 @@ export function Library({ onSelectTrack, onLoadToRoom }: LibraryProps) {
       if (!res.ok) throw new Error('Could not get stream URL');
       const { url } = await res.json() as { url: string };
 
-      const selectCallback = onSelectTrack || onLoadToRoom;
-      if (selectCallback) {
-        // Host mode: pass the signed URL up to the parent
+      const cb = onSelectTrack || onLoadToRoom;
+      if (cb) {
         setLoadingTrackId(track.id);
-        try {
-          await selectCallback(track, url);
-        } finally {
-          setLoadingTrackId(null);
-        }
+        try { await cb(track, url); } finally { setLoadingTrackId(null); }
         return;
       }
 
-      // Standalone playback
       if (audioRef.current) {
         if (playingId === track.id) {
-          if (audioRef.current.paused) {
-            audioRef.current.play().catch(() => {});
-          } else {
-            audioRef.current.pause();
-          }
+          audioRef.current.paused ? audioRef.current.play().catch(() => {}) : audioRef.current.pause();
           return;
         }
-        audioRef.current.src = url;
-        audioRef.current.load();
+        audioRef.current.src = url; audioRef.current.load();
         audioRef.current.play().catch(() => {});
         setPlayingId(track.id);
       }
@@ -535,110 +585,142 @@ export function Library({ onSelectTrack, onLoadToRoom }: LibraryProps) {
     try {
       const res = await fetch(`${base}/library/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error('Delete failed');
-      if (playingId === id && audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = '';
-        setPlayingId(null);
-      }
+      if (playingId === id && audioRef.current) { audioRef.current.pause(); audioRef.current.src = ''; setPlayingId(null); }
       setTracks((prev) => prev.filter((t) => t.id !== id));
       fetchStorage();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Delete error');
-    }
+    } catch (err: unknown) { setError(err instanceof Error ? err.message : 'Delete error'); }
   }, [base, playingId, fetchStorage]);
 
-  const handleUploaded = useCallback(() => {
-    fetchTracks();
-    fetchStorage();
-  }, [fetchTracks, fetchStorage]);
+  const handleUploaded = useCallback(() => { fetchTracks(); fetchStorage(); }, [fetchTracks, fetchStorage]);
 
   const filtered = tracks.filter((t) => {
     const q = search.toLowerCase();
-    return (
-      (t.title  || '').toLowerCase().includes(q) ||
-      (t.artist || '').toLowerCase().includes(q)
-    );
+    return (t.title || '').toLowerCase().includes(q) || (t.artist || '').toLowerCase().includes(q);
   });
 
   return (
-    <div className="space-y-4 font-mono">
-      {/* Hidden audio element for standalone playback */}
-      <audio ref={audioRef} onEnded={() => setPlayingId(null)} />
+    <>
+      {/* Global keyframe styles */}
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes nowplaying { from { height: 30%; } to { height: 90%; } }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+      `}</style>
 
-      {/* Storage bar */}
-      <StorageBar storage={storage} />
+      <audio ref={audioRef} onEnded={() => setPlayingId(null)} style={{ display: 'none' }} />
 
-      {/* Header + Search */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex-1 relative min-w-[160px]">
-          <input
-            type="text"
-            placeholder="Search tracks…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-noir-graphite border border-noir-border text-noir-white px-3 py-2 rounded-lg font-mono text-xs focus:outline-none focus:border-[#c8a96e]/50 transition-all placeholder:text-noir-dim"
-          />
-        </div>
-        <button
-          onClick={() => setShowUpload((p) => !p)}
-          className="
-            px-3 py-2 rounded-lg font-mono text-[11px] uppercase tracking-wider font-semibold
-            border transition-all hover:scale-[1.02] active:scale-[0.98]
-            border-[#c8a96e]/40 text-[#c8a96e] bg-[#c8a96e]/5 hover:bg-[#c8a96e]/10
-          "
-        >
-          {showUpload ? '✕ Close' : '📤 Upload'}
-        </button>
-      </div>
+      <div style={{
+        display: 'flex', flexDirection: 'column', height: '100%',
+        background: '#0a0a0f', color: '#e0e0e0',
+        fontFamily: 'monospace',
+      }}>
+        {/* Storage Bar */}
+        <StorageBar storage={storage} />
 
-      {/* Upload form */}
-      {showUpload && (
-        <UploadForm
-          onUploaded={() => { setShowUpload(false); handleUploaded(); }}
-          isFull={storage?.isFull ?? false}
-        />
-      )}
+        {/* Main 2-col split */}
+        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
 
-      {/* Error banner */}
-      {error && (
-        <div className="px-3 py-2 rounded-lg bg-red-950/20 border border-red-900/40 text-red-400 text-[11px]">
-          {error}
-          <button onClick={() => setError(null)} className="ml-2 opacity-60 hover:opacity-100">✕</button>
-        </div>
-      )}
+          {/* ── Left: Track list 65% ── */}
+          <div style={{
+            flex: '0 0 65%', overflowY: 'auto', borderRight: '1px solid rgba(255,255,255,0.04)',
+            display: 'flex', flexDirection: 'column',
+          }}>
+            {/* Search bar */}
+            <div style={{ padding: '14px 16px 10px', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+              <div style={{ position: 'relative' }}>
+                <span style={{
+                  position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)',
+                  color: '#333', fontSize: '12px', pointerEvents: 'none',
+                }}>⌕</span>
+                <input
+                  type="text"
+                  placeholder="Search tracks…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  style={{
+                    width: '100%', boxSizing: 'border-box',
+                    background: 'rgba(255,255,255,0.03)',
+                    border: '1px solid rgba(255,255,255,0.06)',
+                    color: '#ccc', padding: '8px 10px 8px 28px',
+                    borderRadius: '7px', fontFamily: 'monospace', fontSize: '11px',
+                    outline: 'none', transition: 'border-color 0.2s',
+                  }}
+                  onFocus={(e) => { (e.target as HTMLInputElement).style.borderColor = 'rgba(200,169,110,0.4)'; }}
+                  onBlur={(e) => { (e.target as HTMLInputElement).style.borderColor = 'rgba(255,255,255,0.06)'; }}
+                />
+              </div>
+            </div>
 
-      {/* Track list */}
-      {loading ? (
-        <div className="flex flex-col items-center justify-center py-12 gap-3 opacity-60">
-          <div className="w-6 h-6 border-2 border-[#c8a96e] border-t-transparent rounded-full animate-spin" />
-          <p className="font-mono text-[10px] uppercase tracking-widest text-noir-dim">Loading R2 Library…</p>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-12 gap-2 border border-dashed border-noir-border/40 rounded-xl">
-          <span className="text-3xl opacity-20">📭</span>
-          <p className="font-mono text-sm text-noir-ash">No tracks in R2 library</p>
-          <p className="font-mono text-[10px] text-noir-dim">
-            {search ? 'Try a different search' : 'Upload an audio file above to get started'}
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map((track) => (
-            <TrackCard
-              key={track.id}
-              track={track}
-              onPlay={handlePlay}
-              onDelete={handleDelete}
-              isPlaying={playingId === track.id}
-              isLoading={loadingTrackId === track.id}
+            {/* Error banner */}
+            {error && (
+              <div style={{
+                margin: '0 16px 8px', padding: '8px 10px', borderRadius: '7px',
+                background: 'rgba(248,113,113,0.05)', border: '1px solid rgba(248,113,113,0.2)',
+                fontFamily: 'monospace', fontSize: '10px', color: '#f87171',
+                display: 'flex', justifyContent: 'space-between',
+              }}>
+                <span>{error}</span>
+                <button onClick={() => setError(null)} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: '11px' }}>✕</button>
+              </div>
+            )}
+
+            {/* Track list body */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px 16px' }}>
+              {loading ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '12px', opacity: 0.5 }}>
+                  <div style={{ width: '20px', height: '20px', border: '2px solid #c8a96e', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                  <p style={{ fontFamily: 'monospace', fontSize: '9px', letterSpacing: '0.2em', color: '#555' }}>LOADING LIBRARY…</p>
+                </div>
+              ) : filtered.length === 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '200px', gap: '10px' }}>
+                  <div style={{ fontSize: '40px', opacity: 0.08 }}>◉</div>
+                  <p style={{ fontFamily: 'monospace', fontSize: '12px', color: '#444' }}>
+                    {search ? 'No results' : 'Library is empty'}
+                  </p>
+                  <p style={{ fontFamily: 'monospace', fontSize: '9px', color: '#2a2a2a', letterSpacing: '0.1em' }}>
+                    {search ? 'Try a different search' : 'Upload a track using the form →'}
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {filtered.map((track, i) => (
+                    <div key={track.id} style={{ animation: `fadeIn 0.25s ease ${i * 0.03}s both` }}>
+                      <TrackCard
+                        track={track}
+                        onPlay={handlePlay}
+                        onDelete={handleDelete}
+                        isPlaying={playingId === track.id}
+                        isLoading={loadingTrackId === track.id}
+                      />
+                    </div>
+                  ))}
+                  <p style={{ fontFamily: 'monospace', fontSize: '9px', color: '#333', textAlign: 'right', marginTop: '4px', letterSpacing: '0.1em' }}>
+                    {filtered.length} track{filtered.length !== 1 ? 's' : ''}
+                    {storage ? ` · ${storage.usedGB} GB used` : ''}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Right: Upload sidebar 35% ── */}
+          <div style={{
+            flex: '0 0 35%', overflowY: 'auto',
+            padding: '16px',
+            background: 'rgba(255,255,255,0.01)',
+            display: 'flex', flexDirection: 'column', gap: '4px',
+          }}>
+            <p style={{
+              fontFamily: 'monospace', fontSize: '9px', letterSpacing: '0.2em',
+              textTransform: 'uppercase', color: '#3a3a3a', marginBottom: '12px',
+            }}>Upload to Library</p>
+            <UploadSidebar
+              onUploaded={handleUploaded}
+              isFull={storage?.isFull ?? false}
             />
-          ))}
-          <p className="font-mono text-[10px] text-noir-dim text-right pt-1">
-            {filtered.length} track{filtered.length !== 1 ? 's' : ''}
-            {storage ? ` · ${storage.usedGB} GB used` : ''}
-          </p>
+          </div>
         </div>
-      )}
-    </div>
+      </div>
+    </>
   );
 }
