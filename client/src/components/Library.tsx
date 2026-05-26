@@ -202,6 +202,48 @@ function TrackCard({ track, onDelete, onPlay, isPlaying }: TrackCardProps) {
   );
 }
 
+// Helper functions for parsing filename metadata
+function titleCase(str: string): string {
+  return str
+    .split(/\s+/)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function parseFilename(filename: string): { title: string; artist: string } {
+  const nameWithoutExt = filename.replace(/\.[^.]+$/, '');
+  let artist = '';
+  let title = nameWithoutExt;
+
+  if (nameWithoutExt.includes(' - ')) {
+    const parts = nameWithoutExt.split(' - ');
+    artist = parts[0].trim();
+    title = parts.slice(1).join(' - ').trim();
+  } else if (nameWithoutExt.includes(' -')) {
+    const parts = nameWithoutExt.split(' -');
+    artist = parts[0].trim();
+    title = parts.slice(1).join(' -').trim();
+  } else if (nameWithoutExt.includes('- ')) {
+    const parts = nameWithoutExt.split('- ');
+    artist = parts[0].trim();
+    title = parts.slice(1).join('- ').trim();
+  } else if (nameWithoutExt.includes('_')) {
+    const parts = nameWithoutExt.split('_');
+    if (parts.length === 2) {
+      artist = parts[0].trim();
+      title = parts[1].trim();
+    }
+  }
+
+  const cleanTitle = title.replace(/[-_]/g, ' ').trim();
+  const cleanArtist = artist.replace(/[-_]/g, ' ').trim();
+
+  return {
+    title: titleCase(cleanTitle),
+    artist: cleanArtist ? titleCase(cleanArtist) : '',
+  };
+}
+
 // ─── UploadForm ───────────────────────────────────────────────────────────────
 
 function UploadForm({ onUploaded, isFull }: UploadFormProps) {
@@ -210,6 +252,7 @@ function UploadForm({ onUploaded, isFull }: UploadFormProps) {
   const [lyricsFile, setLyricsFile] = useState<File | null>(null);
   const [title, setTitle]           = useState('');
   const [artist, setArtist]         = useState('');
+  const [duration, setDuration]     = useState<number | null>(null);
   const [progress, setProgress]     = useState(0);
   const [uploading, setUploading]   = useState(false);
   const [error, setError]           = useState<string | null>(null);
@@ -217,7 +260,22 @@ function UploadForm({ onUploaded, isFull }: UploadFormProps) {
 
   const reset = () => {
     setAudioFile(null); setCoverFile(null); setLyricsFile(null);
-    setTitle(''); setArtist(''); setProgress(0); setError(null);
+    setTitle(''); setArtist(''); setDuration(null); setProgress(0); setError(null);
+  };
+
+  const handleAudioSelect = (file: File) => {
+    setAudioFile(file);
+    const { title: parsedTitle, artist: parsedArtist } = parseFilename(file.name);
+    setTitle(parsedTitle);
+    setArtist(parsedArtist);
+
+    // Extract duration using HTML5 Audio
+    const audio = new Audio();
+    audio.src = URL.createObjectURL(file);
+    audio.addEventListener('loadedmetadata', () => {
+      setDuration(audio.duration);
+      URL.revokeObjectURL(audio.src);
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -231,6 +289,7 @@ function UploadForm({ onUploaded, isFull }: UploadFormProps) {
     if (lyricsFile) form.append('lyrics', lyricsFile);
     if (title)  form.append('title',  title);
     if (artist) form.append('artist', artist);
+    if (duration !== null) form.append('duration', duration.toString());
 
     const xhr = new XMLHttpRequest();
     xhrRef.current = xhr;
@@ -275,7 +334,7 @@ function UploadForm({ onUploaded, isFull }: UploadFormProps) {
             className="absolute inset-0 opacity-0 cursor-pointer"
             onChange={(e) => {
               const f = e.target.files?.[0];
-              if (f) { setAudioFile(f); if (!title) setTitle(f.name.replace(/\.[^.]+$/, '')); }
+              if (f) handleAudioSelect(f);
             }}
           />
           <p className="font-mono text-xs text-noir-ash">
