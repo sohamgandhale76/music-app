@@ -283,6 +283,7 @@ function UploadSidebar({ onUploaded, isFull }: { onUploaded: () => void; isFull:
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [lyricsFile, setLyricsFile] = useState<File | null>(null);
+  const [statusMsg, setStatusMsg] = useState('');
   const [title, setTitle] = useState('');
   const [artist, setArtist] = useState('');
   const [duration, setDuration] = useState<number | null>(null);
@@ -290,12 +291,13 @@ function UploadSidebar({ onUploaded, isFull }: { onUploaded: () => void; isFull:
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const xhrRef = useRef<XMLHttpRequest | null>(null);
+  const base = SERVER_URL || '';
+
 
   const reset = () => {
     setAudioFile(null); setCoverFile(null); setLyricsFile(null);
     setTitle(''); setArtist(''); setDuration(null);
-    setProgress(0); setError(null);
+    setProgress(0); setStatusMsg(''); setError(null);
   };
 
   const handleAudioSelect = (file: File) => {
@@ -316,41 +318,96 @@ function UploadSidebar({ onUploaded, isFull }: { onUploaded: () => void; isFull:
     if (f && f.type.startsWith('audio/')) handleAudioSelect(f);
   };
 
+  // ── Direct-to-R2 XHR PUT helper ──────────────────────────────────────────────
+  const putToR2 = (url: string, file: File, onProgress?: (pct: number) => void): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', url);
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable && onProgress) onProgress(Math.round((ev.loaded / ev.total) * 100));
+      };
+      xhr.onload  = () => xhr.status < 300 ? resolve() : reject(new Error(`R2 PUT ${xhr.status}`));
+      xhr.onerror = () => reject(new Error('Network error uploading to R2'));
+      xhr.send(file);
+    });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!audioFile) { setError('Please select an audio file.'); return; }
-    setUploading(true); setError(null); setProgress(1);
+    setUploading(true); setError(null); setProgress(0); setStatusMsg('Requesting upload URL…');
 
-    const form = new FormData();
-    form.append('audio', audioFile);
-    if (coverFile)  form.append('cover', coverFile);
-    if (lyricsFile) form.append('lyrics', lyricsFile);
-    if (title)  form.append('title', title);
-    if (artist) form.append('artist', artist);
-    if (duration !== null) form.append('duration', duration.toString());
-
-    const xhr = new XMLHttpRequest();
-    xhrRef.current = xhr;
-    xhr.timeout = 300_000; // 5 minutes
-    xhr.open('POST', `${SERVER_URL || ''}/library/upload`);
-
-    xhr.upload.onprogress = (ev) => {
-      if (ev.lengthComputable) setProgress(Math.round((ev.loaded / ev.total) * 100));
-    };
-
-    xhr.onload = () => {
-      setUploading(false);
-      if (xhr.status === 507) { setError('Storage full — delete some tracks first.'); return; }
-      if (xhr.status < 200 || xhr.status >= 300) {
-        try { setError((JSON.parse(xhr.responseText) as { error: string }).error || 'Upload failed'); }
-        catch { setError('Upload failed'); }
-        return;
+    try {
+      // Step 1 — Get presigned PUT URL for the audio file
+      const urlRes = await fetch(
+        `${base}/library/upload-url?filename=${encodeURIComponent(audioFile.name)}&contentType=${encodeURIComponent(audioFile.type || 'audio/mpeg')}&size=${audioFile.size}&kind=audio`,
+      );
+      if (urlRes.status === 507) { setError('Storage full — delete some tracks first.'); setUploading(false); return; }
+      if (!urlRes.ok) {
+        const j = await urlRes.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error || 'Failed to get upload URL');
       }
+      const { uploadUrl, key, id } = await urlRes.json() as { uploadUrl: string; key: string; id: string };
+
+      // Step 2 — PUT audio directly to R2 (shows real progress)
+      setStatusMsg('Uploading to R2…'); setProgress(1);
+      await putToR2(uploadUrl, audioFile, (pct) => setProgress(pct));
+
+      // Step 3 — Optional cover
+      let cover_key: string | null = null;
+      if (coverFile) {
+        setStatusMsg('Uploading cover…');
+        const covRes = await fetch(
+          `${base}/library/upload-url?filename=${encodeURIComponent(coverFile.name)}&contentType=${encodeURIComponent(coverFile.type || 'image/jpeg')}&kind=cover&id=${id}`,
+        );
+        if (covRes.ok) {
+          const { uploadUrl: cu, key: ck } = await covRes.json() as { uploadUrl: string; key: string };
+          await putToR2(cu, coverFile);
+          cover_key = ck;
+        }
+      }
+
+      // Step 4 — Optional lyrics
+      let lyrics_key: string | null = null;
+      if (lyricsFile) {
+        setStatusMsg('Uploading lyrics…');
+        const lrcRes = await fetch(
+          `${base}/library/upload-url?filename=${encodeURIComponent(lyricsFile.name)}&contentType=text/plain&kind=lyrics&id=${id}`,
+        );
+        if (lrcRes.ok) {
+          const { uploadUrl: lu, key: lk } = await lrcRes.json() as { uploadUrl: string; key: string };
+          await putToR2(lu, lyricsFile);
+          lyrics_key = lk;
+        }
+      }
+
+      // Step 5 — Save metadata to PostgreSQL via server
+      setStatusMsg('Saving metadata…');
+      const confirmRes = await fetch(`${base}/library/confirm-upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id, key,
+          title: (title || '').trim() || audioFile.name.replace(/\.[^.]+$/, ''),
+          artist: (artist || '').trim() || null,
+          duration,
+          size: audioFile.size,
+          format: audioFile.name.split('.').pop()?.toLowerCase() || 'mp3',
+          cover_key,
+          lyrics_key,
+        }),
+      });
+      if (!confirmRes.ok) {
+        const j = await confirmRes.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error || 'Failed to save track metadata');
+      }
+
+      setStatusMsg(''); setUploading(false);
       reset(); onUploaded();
-    };
-    xhr.onerror = () => { setUploading(false); setError('Network error during upload.'); };
-    xhr.ontimeout = () => { setUploading(false); setError('Upload timed out. Try a smaller file or check your connection.'); };
-    xhr.send(form);
+    } catch (err: unknown) {
+      setUploading(false); setStatusMsg('');
+      setError(err instanceof Error ? err.message : 'Upload failed');
+    }
   };
 
   const inputStyle: React.CSSProperties = {
@@ -472,7 +529,14 @@ function UploadSidebar({ onUploaded, isFull }: { onUploaded: () => void; isFull:
         </div>
       )}
 
-      {/* Upload button with integrated progress */}
+      {/* Status label shown between upload phases */}
+      {uploading && statusMsg && (
+        <p style={{ fontFamily: 'monospace', fontSize: '9px', color: '#555', letterSpacing: '0.1em', textAlign: 'center', margin: '-6px 0' }}>
+          {statusMsg}
+        </p>
+      )}
+
+      {/* Upload button with integrated progress fill */}
       <button
         type="submit"
         disabled={uploading || isFull || !audioFile}
@@ -492,16 +556,19 @@ function UploadSidebar({ onUploaded, isFull }: { onUploaded: () => void; isFull:
             : '0 4px 20px rgba(200,169,110,0.25)',
         }}
       >
-        {/* Progress fill behind button text */}
         {uploading && (
           <div style={{
             position: 'absolute', left: 0, top: 0, bottom: 0,
-            width: `${progress}%`, transition: 'width 0.3s ease',
-            background: 'rgba(200,169,110,0.3)', borderRadius: '8px',
+            width: `${progress}%`, transition: 'width 0.4s ease',
+            background: 'rgba(200,169,110,0.35)', borderRadius: '8px',
           }} />
         )}
         <span style={{ position: 'relative', zIndex: 1 }}>
-          {uploading ? `Uploading… ${progress}%` : isFull ? 'Storage Full' : audioFile ? '⬆  Upload Track' : 'Select a File First'}
+          {uploading
+            ? progress > 0 ? `Uploading… ${progress}%` : 'Starting…'
+            : isFull ? 'Storage Full'
+            : audioFile ? '⬆  Upload Track'
+            : 'Select a File First'}
         </span>
       </button>
 

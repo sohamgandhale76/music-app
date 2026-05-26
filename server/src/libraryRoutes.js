@@ -10,6 +10,7 @@ const { v4: uuidv4 } = require('uuid');
 const {
   uploadToR2,
   getStreamUrl,
+  getUploadUrl,
   deleteFromR2,
   getTotalStorageUsed,
   checkStorageLimit,
@@ -26,10 +27,11 @@ const logger = require('./logger');
 
 const router = express.Router();
 
-// Multer: memory storage, 2 GB file size cap
+// Multer: memory storage — only used for small optional files (cover, lyrics).
+// The large audio file now goes directly client → R2 via presigned PUT URL.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 2 * 1024 * 1024 * 1024 }, // 2 GB
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB cap (covers + lyrics only)
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -93,14 +95,123 @@ router.get('/storage', async (_req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// POST /library/upload
-// Accepts: audio (required), cover (optional), lyrics (optional)
-// Body fields: title, artist, duration
+// GET /library/upload-url
+// Step 1 of direct-to-R2 upload flow.
+// Client requests a presigned PUT URL for a specific file; the large audio
+// bytes never transit the Render server, completely bypassing its 30s timeout.
+//
+// Query params:
+//   filename    - original filename (used to derive extension)
+//   contentType - MIME type of the file
+//   size        - file size in bytes (for storage limit check)
+//   kind        - "audio" | "cover" | "lyrics" (default "audio")
+//   id          - (optional) reuse an existing track UUID for cover/lyrics
 // ─────────────────────────────────────────────────────────────────────────────
+router.get('/upload-url', async (req, res) => {
+  try {
+    const { filename, contentType, size, kind = 'audio', id: existingId } = req.query;
 
-// Extend socket timeouts to 5 minutes for large file uploads (avoids Render's 30s default)
+    if (!filename || !contentType) {
+      return res.status(400).json({ error: 'filename and contentType are required' });
+    }
+
+    const id = existingId || uuidv4();
+
+    // Derive extension from filename first, fall back to MIME
+    const rawExt = filename.includes('.')
+      ? path.extname(filename).replace('.', '').toLowerCase()
+      : getExtFromMime(contentType);
+
+    // Build the R2 key for each asset type
+    let key;
+    if (kind === 'cover') {
+      key = `covers/${id}.${rawExt || 'jpg'}`;
+    } else if (kind === 'lyrics') {
+      key = `lyrics/${id}.lrc`;
+    } else {
+      // audio — run storage limit check
+      const fileSizeBytes = parseInt(size, 10) || 0;
+      if (fileSizeBytes > 0) {
+        try {
+          await checkStorageLimit(fileSizeBytes);
+        } catch (err) {
+          if (err.code === 'STORAGE_FULL' || err.message === 'STORAGE_FULL') {
+            return res.status(507).json({
+              error: 'Storage full',
+              message: 'Library has reached its 9.5 GB limit. Delete some tracks to free space.',
+            });
+          }
+          logger.error('Storage check failed', { error: err.message });
+          return res.status(500).json({ error: 'Failed to check storage capacity' });
+        }
+      }
+      key = `audio/${id}.${rawExt || getExtFromMime(contentType)}`;
+    }
+
+    const uploadUrl = await getUploadUrl(key, contentType, 3600);
+    logger.info('Presigned upload URL issued', { id, kind, key });
+
+    res.json({ uploadUrl, key, id });
+  } catch (err) {
+    logger.error('GET /library/upload-url failed', { error: err.message });
+    res.status(500).json({ error: 'Failed to generate upload URL' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /library/confirm-upload
+// Step 2 of direct-to-R2 upload flow.
+// Called AFTER the client has PUT the file directly to R2.
+// Saves metadata to PostgreSQL and returns the new track record.
+//
+// JSON body:
+//   id, key (audio_key), title, artist, duration, size, format,
+//   cover_key (optional), lyrics_key (optional)
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/confirm-upload', express.json(), async (req, res) => {
+  try {
+    const {
+      id, key, title, artist, duration, size, format,
+      cover_key = null, lyrics_key = null,
+    } = req.body;
+
+    if (!id || !key) {
+      return res.status(400).json({ error: 'id and key are required' });
+    }
+
+    const cleanTitle  = (title || '').trim() || 'Untitled';
+    const cleanArtist = (artist || '').trim() || null;
+    const cleanDur    = parseFloat(duration) || null;
+    const cleanSize   = parseInt(size, 10) || null;
+    const cleanFmt    = format || key.split('.').pop() || 'mp3';
+
+    const track = await insertTrack({
+      id,
+      title:      cleanTitle,
+      artist:     cleanArtist,
+      duration:   cleanDur,
+      size:       cleanSize,
+      format:     cleanFmt,
+      audio_key:  key,
+      cover_key,
+      lyrics_key,
+    });
+
+    logger.info('Track confirmed and saved to DB', { id, title: cleanTitle, format: cleanFmt, size: cleanSize });
+    res.json({ success: true, track });
+  } catch (err) {
+    logger.error('POST /library/confirm-upload failed', { error: err.message });
+    res.status(500).json({ error: 'Failed to save track metadata' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POST /library/upload  (legacy — kept for small files / API compatibility)
+// Extend socket timeouts to 5 minutes. This path is still used as fallback
+// but direct upload is preferred for audio files.
+// ─────────────────────────────────────────────────────────────────────────────
 const uploadTimeout = (req, res, next) => {
-  req.setTimeout(300_000); // 5 minutes
+  req.setTimeout(300_000);
   res.setTimeout(300_000);
   next();
 };
@@ -114,7 +225,7 @@ router.post(
     { name: 'lyrics', maxCount: 1 },
   ]),
   async (req, res) => {
-    console.log('[library/upload] files received:', req.files, 'body:', req.body);
+    console.log('[library/upload] files received:', req.files ? Object.keys(req.files) : 'none', 'body:', req.body);
     const audio  = req.files?.audio?.[0];
     const cover  = req.files?.cover?.[0];
     const lyrics = req.files?.lyrics?.[0];
@@ -194,14 +305,13 @@ router.post(
       });
     } catch (err) {
       logger.error('DB insert failed', { error: err.message });
-      // Best-effort: clean up uploaded objects
       deleteFromR2(audioKey).catch(() => {});
       if (coverKey)  deleteFromR2(coverKey).catch(() => {});
       if (lyricsKey) deleteFromR2(lyricsKey).catch(() => {});
       return res.status(500).json({ error: 'Failed to save track metadata' });
     }
 
-    logger.info('Track uploaded to R2 library', { id, title, format, size: audio.size });
+    logger.info('Track uploaded to R2 library (legacy path)', { id, title, format, size: audio.size });
     res.json({ success: true, track });
   }
 );

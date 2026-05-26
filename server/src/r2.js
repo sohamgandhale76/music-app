@@ -2,9 +2,8 @@
 // Uses the S3-compatible API exposed by Cloudflare R2.
 // All functions are async and throw on failure.
 
-const { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command, GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const { GetObjectCommand } = require('@aws-sdk/client-s3');
 
 const STORAGE_LIMIT_BYTES = 9.5 * 1024 * 1024 * 1024; // 9.5 GB
 
@@ -97,9 +96,27 @@ async function checkStorageLimit(incomingFileSize) {
   }
 }
 
+/**
+ * Generate a presigned PUT URL so the client can upload directly to R2,
+ * bypassing the server entirely for the file bytes.
+ * @param {string} key          - Object key (e.g. "audio/abc123.flac")
+ * @param {string} contentType  - MIME type of the file
+ * @param {number} [expiresIn]  - URL validity in seconds (default 3600)
+ * @returns {Promise<string>} Presigned PUT URL
+ */
+async function getUploadUrl(key, contentType, expiresIn = 3600) {
+  const cmd = new PutObjectCommand({
+    Bucket: BUCKET,
+    Key: key,
+    ContentType: contentType,
+  });
+  return getSignedUrl(s3, cmd, { expiresIn });
+}
+
 module.exports = {
   uploadToR2,
   getStreamUrl,
+  getUploadUrl,
   deleteFromR2,
   getTotalStorageUsed,
   checkStorageLimit,
