@@ -9,6 +9,7 @@ import { useRoom } from '../hooks/useRoom';
 import { useToast } from '../hooks/useToast';
 import { ToastContainer } from './Toast';
 import { LibraryBrowser } from './LibraryBrowser';
+import { Library } from './Library';
 import { DynamicBackground } from './DynamicBackground';
 import { sliceAudioFile, timeToChunkIndex, CHUNK_DURATION } from '../lib/chunker';
 import { parseLrc, type LrcLine, type LrcMeta } from '../lib/lrcParser';
@@ -62,6 +63,7 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
   const [dragOver, setDragOver]       = useState(false);
   const [activeTab, setActiveTab]     = useState<'player' | 'library'>('player');
   const [mobileTab, setMobileTab]     = useState<'player' | 'lyrics' | 'library'>('player');
+  const [showR2Library, setShowR2Library] = useState(false);
 
   // Queue and Playback states
   const [libraryTracks, setLibraryTracks] = useState<any[]>([]);
@@ -391,6 +393,65 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
     setActiveTab('player');
   }, [libraryTracks, queue, playTrack, emitLoadLibraryTrack, toast]);
 
+  // ── R2 Library: host picks a track from R2 → signed URL → audioRef ──────
+  const handleR2TrackSelect = useCallback((track: any, signedUrl: string) => {
+    if (!audioRef.current) return;
+    setShowR2Library(false);
+    
+    const coverFilename = track.cover_key ? `r2-${track.id}` : null;
+    setSongName(track.title || 'Unknown');
+    setActiveTrack({ ...track, coverFilename });
+    setLyrics([]);
+    setLrcMeta({ title: track.title, artist: track.artist });
+
+    // Load signed URL directly into the audio element (same pattern as playTrack)
+    audioRef.current.src = signedUrl;
+    audioRef.current.load();
+    setAudioReady(true);
+
+    // Broadcast track metadata to all listeners in the room
+    emitUpdateTrackMetadata({
+      songName: track.title,
+      totalChunks: 0,
+      mimeType: `audio/${track.format || 'mpeg'}`,
+      libraryTrackId: track.id,
+      coverFilename,
+      lyrics: [],
+      lrcMeta: { title: track.title, artist: track.artist },
+    });
+
+    if (track.lyrics_key) {
+      fetch(`${SERVER_URL || ''}/library/${track.id}/lyrics`)
+        .then((res) => {
+          if (!res.ok) throw new Error('Failed to load lyrics');
+          return res.text();
+        })
+        .then((text) => {
+          const lrcData = parseLrc(text);
+          setLyrics(lrcData.lines);
+          const lyricsMeta = {
+            title: lrcData.meta.title || track.title,
+            artist: lrcData.meta.artist || track.artist,
+          };
+          setLrcMeta(lyricsMeta);
+          emitUpdateTrackMetadata({
+            lyrics: lrcData.lines,
+            lrcMeta: lyricsMeta,
+          });
+        })
+        .catch((err) => {
+          console.warn('Failed to load R2 lyrics:', err);
+        });
+    }
+
+    audioRef.current.play().then(() => {
+      setIsPlaying(true);
+      emitPlay(0, 0);
+    }).catch(() => {});
+
+    toast.success(`Playing "${track.title}" from R2 Library`);
+  }, [emitUpdateTrackMetadata, emitPlay, toast]);
+
   const handleHostLibraryTrackList = useCallback((tracksToHost: any[], startIndex = 0) => {
     if (tracksToHost.length === 0) return;
     setQueue(tracksToHost);
@@ -675,6 +736,22 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
                     onChange={(e) => processFiles(Array.from(e.target.files ?? []))}
                   />
                 </div>
+
+                {/* ── Pick from R2 Library button ────────────────────── */}
+                <button
+                  id="pick-r2-library-btn"
+                  onClick={() => setShowR2Library(true)}
+                  className="
+                    w-full flex items-center justify-center gap-2 py-2.5 px-4
+                    rounded-xl border border-accent-gold/25 bg-accent-gold/[0.04]
+                    font-mono text-[11px] text-accent-gold uppercase tracking-widest
+                    hover:border-accent-gold/50 hover:bg-accent-gold/[0.08]
+                    transition-all duration-200 hover:scale-[1.01] active:scale-[0.99]
+                  "
+                >
+                  <span className="text-base">☁</span>
+                  Pick from R2 Library
+                </button>
               </>
             ) : null}
 
@@ -1360,6 +1437,40 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
           <span>Library</span>
         </button>
       </div>
+      {/* ── R2 Library Modal ──────────────────────────────────────────── */}
+      {showR2Library && (
+        <div
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowR2Library(false); }}
+        >
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-noir-black/80 backdrop-blur-sm" onClick={() => setShowR2Library(false)} />
+
+          {/* Panel */}
+          <div className="relative z-10 w-full sm:max-w-2xl max-h-[85vh] flex flex-col rounded-t-2xl sm:rounded-2xl border border-noir-border/50 bg-noir-deep/95 backdrop-blur-xl shadow-[0_-4px_60px_rgba(0,0,0,0.8)] overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-noir-border/30 shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="text-accent-gold text-sm">☁</span>
+                <span className="font-mono text-[11px] text-accent-gold uppercase tracking-[0.2em]">R2 Library</span>
+                <span className="font-mono text-[10px] text-noir-dim">— pick a track to play in the room</span>
+              </div>
+              <button
+                onClick={() => setShowR2Library(false)}
+                className="w-7 h-7 rounded-lg border border-noir-border text-noir-ash hover:text-noir-white hover:border-noir-dim flex items-center justify-center text-sm transition-all"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Library content */}
+            <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+              <Library onSelectTrack={handleR2TrackSelect} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

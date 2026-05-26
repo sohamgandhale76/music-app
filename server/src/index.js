@@ -53,7 +53,7 @@ app.use(helmet({
 
 app.use(cors({
   origin: corsOrigin,
-  methods: ['GET', 'POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -107,8 +107,14 @@ app.post('/api/ntp', ntpLimiter, express.json(), handleNtp);
 
 // ─── Chunk Upload ─────────────────────────────────────────────────────────
 
-const libraryManager = require('./libraryManager');
-const fs             = require('fs');
+const libraryManager  = require('./libraryManager');
+const libraryRoutes   = require('./libraryRoutes');
+const db              = require('./db');
+const fs              = require('fs');
+
+// ─── R2 Persistent Library Routes ────────────────────────────────────────────
+// Mounted at /library (separate from legacy /api/library Telegram routes)
+app.use('/library', libraryRoutes);
 
 // ─── Chunk Upload ─────────────────────────────────────────────────────────
 
@@ -328,8 +334,21 @@ app.post('/api/library/tracks/:id/sync', apiLimiter, async (req, res) => {
 // Download high-quality track (supporting HTTP 206 Range Requests for seeking)
 app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:filename'], async (req, res) => {
   const { id } = req.params;
-  const track = libraryManager.getTrack(id);
-  if (!track) return res.status(404).json({ error: 'Track not found' });
+  let track = libraryManager.getTrack(id);
+  if (!track) {
+    // Check if it exists in the R2 PostgreSQL database
+    try {
+      const r2Track = await db.getTrack(id);
+      if (r2Track) {
+        const r2 = require('./r2');
+        const url = await r2.getStreamUrl(r2Track.audio_key);
+        return res.redirect(url);
+      }
+    } catch (err) {
+      logger.error('Failed to look up R2 track for download', { id, error: err.message });
+    }
+    return res.status(404).json({ error: 'Track not found' });
+  }
 
   const range = req.headers.range;
   const fileSize = track.fileSize;
@@ -479,8 +498,25 @@ app.get(['/api/library/tracks/:id/download', '/api/library/tracks/:id/download/:
 });
 
 // Serve Album cover arts
-app.get('/api/library/covers/:filename', (req, res) => {
+app.get('/api/library/covers/:filename', async (req, res) => {
   const { filename } = req.params;
+
+  // Intercept R2 requests
+  if (filename.startsWith('r2-')) {
+    const id = filename.replace(/^r2-/, '').split('.')[0];
+    try {
+      const track = await db.getTrack(id);
+      if (track && track.cover_key) {
+        const r2 = require('./r2');
+        const url = await r2.getStreamUrl(track.cover_key);
+        return res.redirect(url);
+      }
+    } catch (err) {
+      logger.error('Failed to get R2 cover art', { filename, error: err.message });
+    }
+    return res.status(404).json({ error: 'Cover not found' });
+  }
+
   // Prevent path traversal
   const sanitized = path.basename(filename);
   const coverPath = path.join(__dirname, '../uploads', sanitized);
@@ -765,6 +801,17 @@ io.on('connection', (socket) => {
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 async function startServer() {
+  // ── Initialize PostgreSQL schema ─────────────────────────────────────────
+  if (process.env.DATABASE_URL) {
+    try {
+      await db.initDb();
+    } catch (err) {
+      logger.error('Failed to initialize PostgreSQL schema — R2 library routes will not work', { error: err.message });
+    }
+  } else {
+    logger.warn('DATABASE_URL not set — R2 library routes require a PostgreSQL database');
+  }
+
   // Sync library catalog from Telegram cloud if active
   try {
     const telegramBot = require('./telegramBot');
