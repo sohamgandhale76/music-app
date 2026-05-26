@@ -28,6 +28,7 @@ interface StorageStats {
 interface LibraryProps {
   /** When provided, Library runs in "host picker" mode — clicking Play calls this instead of local playback */
   onSelectTrack?: (track: R2Track, signedUrl: string) => void;
+  onLoadToRoom?: (track: R2Track, signedUrl: string) => void;
 }
 
 interface TrackCardProps {
@@ -35,6 +36,7 @@ interface TrackCardProps {
   onDelete: (id: string) => void;
   onPlay: (track: R2Track) => void;
   isPlaying: boolean;
+  isLoading: boolean;
 }
 
 interface UploadFormProps {
@@ -119,7 +121,7 @@ function StorageBar({ storage }: { storage: StorageStats | null }) {
 
 // ─── TrackCard ────────────────────────────────────────────────────────────────
 
-function TrackCard({ track, onDelete, onPlay, isPlaying }: TrackCardProps) {
+function TrackCard({ track, onDelete, onPlay, isPlaying, isLoading }: TrackCardProps) {
   const base = SERVER_URL || '';
   const coverUrl = track.cover_key ? `${base}/library/${track.id}/cover` : null;
 
@@ -177,18 +179,27 @@ function TrackCard({ track, onDelete, onPlay, isPlaying }: TrackCardProps) {
       {/* Actions */}
       <div className="flex flex-col gap-1.5 justify-center shrink-0">
         <button
-          onClick={() => onPlay(track)}
+          onClick={() => !isLoading && onPlay(track)}
+          disabled={isLoading}
           className={`
             w-8 h-8 rounded-lg border flex items-center justify-center text-sm
             transition-all hover:scale-105 active:scale-95
-            ${isPlaying
+            ${isLoading
+              ? 'border-[#c8a96e]/30 text-noir-dim cursor-not-allowed'
+              : isPlaying
               ? 'border-[#c8a96e]/60 bg-[#c8a96e]/20 text-[#c8a96e]'
               : 'border-noir-border text-noir-ash hover:border-[#c8a96e]/40 hover:text-[#c8a96e] hover:bg-[#c8a96e]/5'
             }
           `}
-          title={isPlaying ? 'Playing' : 'Play'}
+          title={isLoading ? 'Loading...' : isPlaying ? 'Playing' : 'Play'}
         >
-          {isPlaying ? '⏸' : '▶'}
+          {isLoading ? (
+            <div className="w-3.5 h-3.5 border-2 border-[#c8a96e] border-t-transparent rounded-full animate-spin" />
+          ) : isPlaying ? (
+            '⏸'
+          ) : (
+            '▶'
+          )}
         </button>
         <button
           onClick={() => onDelete(track.id)}
@@ -432,13 +443,14 @@ function UploadForm({ onUploaded, isFull }: UploadFormProps) {
  *   onSelectTrack(track, signedUrl) — called when host picks a track to play in the room.
  *                                     If not provided, the component is in standalone mode.
  */
-export function Library({ onSelectTrack }: LibraryProps) {
+export function Library({ onSelectTrack, onLoadToRoom }: LibraryProps) {
   const [tracks, setTracks]         = useState<R2Track[]>([]);
   const [storage, setStorage]       = useState<StorageStats | null>(null);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState<string | null>(null);
   const [search, setSearch]         = useState('');
   const [playingId, setPlayingId]   = useState<string | null>(null);
+  const [loadingTrackId, setLoadingTrackId] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const base = SERVER_URL || '';
@@ -486,9 +498,15 @@ export function Library({ onSelectTrack }: LibraryProps) {
       if (!res.ok) throw new Error('Could not get stream URL');
       const { url } = await res.json() as { url: string };
 
-      if (onSelectTrack) {
+      const selectCallback = onSelectTrack || onLoadToRoom;
+      if (selectCallback) {
         // Host mode: pass the signed URL up to the parent
-        onSelectTrack(track, url);
+        setLoadingTrackId(track.id);
+        try {
+          await selectCallback(track, url);
+        } finally {
+          setLoadingTrackId(null);
+        }
         return;
       }
 
@@ -510,7 +528,7 @@ export function Library({ onSelectTrack }: LibraryProps) {
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Playback error');
     }
-  }, [base, onSelectTrack, playingId]);
+  }, [base, onSelectTrack, onLoadToRoom, playingId]);
 
   const handleDelete = useCallback(async (id: string) => {
     if (!window.confirm('Delete this track from the R2 library?')) return;
@@ -612,6 +630,7 @@ export function Library({ onSelectTrack }: LibraryProps) {
               onPlay={handlePlay}
               onDelete={handleDelete}
               isPlaying={playingId === track.id}
+              isLoading={loadingTrackId === track.id}
             />
           ))}
           <p className="font-mono text-[10px] text-noir-dim text-right pt-1">

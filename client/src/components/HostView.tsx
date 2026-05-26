@@ -8,7 +8,6 @@ import { GlowSpotlight } from './GlowSpotlight';
 import { useRoom } from '../hooks/useRoom';
 import { useToast } from '../hooks/useToast';
 import { ToastContainer } from './Toast';
-import { LibraryBrowser } from './LibraryBrowser';
 import { Library } from './Library';
 import { DynamicBackground } from './DynamicBackground';
 import { sliceAudioFile, timeToChunkIndex, CHUNK_DURATION } from '../lib/chunker';
@@ -66,7 +65,7 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
   const [showR2Library, setShowR2Library] = useState(false);
 
   // Queue and Playback states
-  const [libraryTracks, setLibraryTracks] = useState<any[]>([]);
+  // const [libraryTracks, setLibraryTracks] = useState<any[]>([]);
   const [queue, setQueue] = useState<any[]>([]);
   const [currentQueueIndex, setCurrentQueueIndex] = useState<number>(-1);
   const [isShuffle, setIsShuffle] = useState(false);
@@ -155,7 +154,7 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
     setUploaded(0);
     setAudioReady(false);
     setSongName(file.name.replace(/\.[^.]+$/, ''));
-    setActiveTrack(null);
+    setActiveTrack(lrcData?.meta?.activeTrack || null);
 
     let resolvedTotal = 0;
 
@@ -200,8 +199,8 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
         songName: file.name.replace(/\.[^.]+$/, ''),
         totalChunks: resolvedTotal,
         mimeType: file.type || 'audio/mpeg',
-        libraryTrackId: null,
-        coverFilename: null,
+        libraryTrackId: lrcData?.meta?.libraryTrackId || null,
+        coverFilename: lrcData?.meta?.coverFilename || null,
         lyrics: lrcData ? lrcData.lines : [],
         lrcMeta: lrcData ? lrcData.meta : {},
       });
@@ -214,18 +213,18 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
   }, [roomId, toast, emitUpdateTrackMetadata]);
 
   // Fetch tracks list on mount and whenever active tab changes to keep library metadata up-to-date
-  const fetchLibraryCatalog = useCallback(() => {
-    fetch(`${SERVER_URL || ''}/api/library/tracks`)
-      .then(res => res.json())
-      .then(data => {
-        setLibraryTracks(data.tracks || []);
-      })
-      .catch(() => {});
-  }, []);
+  // const fetchLibraryCatalog = useCallback(() => {
+  //   fetch(`${SERVER_URL || ''}/api/library/tracks`)
+  //     .then(res => res.json())
+  //     .then(data => {
+  //       setLibraryTracks(data.tracks || []);
+  //     })
+  //     .catch(() => {});
+  // }, []);
 
-  useEffect(() => {
-    fetchLibraryCatalog();
-  }, [fetchLibraryCatalog, activeTab]);
+  // useEffect(() => {
+  //   fetchLibraryCatalog();
+  // }, [fetchLibraryCatalog, activeTab]);
 
   // Automatically fetch and load lyrics when a library track plays
   useEffect(() => {
@@ -369,121 +368,144 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
     }
   }, [queue, currentQueueIndex, isRepeat, playTrack, emitSeek]);
 
-  const handleHostLibraryTrack = useCallback((trackId: string) => {
-    const track = libraryTracks.find(t => t.id === trackId);
-    if (track) {
-      let idx = queue.findIndex(t => t.id === trackId);
-      if (idx === -1) {
-        const newQueue = [...queue, track];
-        setQueue(newQueue);
-        idx = newQueue.length - 1;
-      }
-      setCurrentQueueIndex(idx);
-      playTrack(track);
-    } else {
-      emitLoadLibraryTrack(trackId);
-      const url = `${SERVER_URL || ''}/api/library/tracks/${trackId}/download`;
-      if (audioRef.current) {
-        audioRef.current.src = url;
-        audioRef.current.load();
-        setAudioReady(true);
-      }
-      toast.success('Loading track...');
-    }
-    setActiveTab('player');
-  }, [libraryTracks, queue, playTrack, emitLoadLibraryTrack, toast]);
+  // const handleHostLibraryTrack = useCallback((trackId: string) => {
+  //   const track = libraryTracks.find(t => t.id === trackId);
+  //   if (track) {
+  //     let idx = queue.findIndex(t => t.id === trackId);
+  //     if (idx === -1) {
+  //       const newQueue = [...queue, track];
+  //       setQueue(newQueue);
+  //       idx = newQueue.length - 1;
+  //     }
+  //     setCurrentQueueIndex(idx);
+  //     playTrack(track);
+  //   } else {
+  //     emitLoadLibraryTrack(trackId);
+  //     const url = `${SERVER_URL || ''}/api/library/tracks/${trackId}/download`;
+  //     if (audioRef.current) {
+  //       audioRef.current.src = url;
+  //       audioRef.current.load();
+  //       setAudioReady(true);
+  //     }
+  //     toast.success('Loading track...');
+  //   }
+  //   setActiveTab('player');
+  // }, [libraryTracks, queue, playTrack, emitLoadLibraryTrack, toast]);
 
   // ── R2 Library: host picks a track from R2 → signed URL → audioRef ──────
-  const handleR2TrackSelect = useCallback((track: any, signedUrl: string) => {
-    if (!audioRef.current) return;
+  const handleR2TrackSelect = useCallback(async (track: any, signedUrl: string) => {
     setShowR2Library(false);
     
-    const coverFilename = track.cover_key ? `r2-${track.id}` : null;
-    setSongName(track.title || 'Unknown');
-    setActiveTrack({ ...track, coverFilename });
-    setLyrics([]);
-    setLrcMeta({ title: track.title, artist: track.artist });
+    console.log(`[R2 Host] Fetching signed URL for "${track.title}":`, signedUrl);
+    const toastId = toast.show(`Downloading "${track.title}" from R2 Library...`, 'info', 10000);
 
-    // Load signed URL directly into the audio element (same pattern as playTrack)
-    audioRef.current.src = signedUrl;
-    audioRef.current.load();
-    setAudioReady(true);
+    try {
+      // 1. Fetch ArrayBuffer from the signed R2 URL
+      const res = await fetch(signedUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status} failed to download audio file`);
+      
+      const arrayBuffer = await res.arrayBuffer();
+      
+      // 2. Build the File object
+      const format = (track.format || 'mp3').toLowerCase();
+      const mimeType = format === 'flac' ? 'audio/flac' :
+                       format === 'wav'  ? 'audio/wav'  :
+                       format === 'ogg'  ? 'audio/ogg'  : 'audio/mpeg';
+                       
+      const file = new File([arrayBuffer], `${track.title}.${format}`, { type: mimeType });
+      
+      // 3. Resolve coverFilename
+      const coverFilename = track.cover_key ? `r2-${track.id}` : null;
+      
+      // 4. Load lyrics if present
+      let lrcData = null;
+      if (track.lyrics_key) {
+        try {
+          const lrcRes = await fetch(`${SERVER_URL || ''}/library/${track.id}/lyrics`);
+          if (lrcRes.ok) {
+            const text = await lrcRes.text();
+            const parsed = parseLrc(text);
+            lrcData = {
+              lines: parsed.lines,
+              meta: {
+                title: parsed.meta.title || track.title,
+                artist: parsed.meta.artist || track.artist,
+                coverFilename,
+                libraryTrackId: track.id,
+                activeTrack: { ...track, coverFilename }
+              }
+            };
+          }
+        } catch (err) {
+          console.warn('Failed to load R2 lyrics during selection:', err);
+        }
+      }
 
-    // Broadcast track metadata to all listeners in the room
-    emitUpdateTrackMetadata({
-      songName: track.title,
-      totalChunks: 0,
-      mimeType: `audio/${track.format || 'mpeg'}`,
-      libraryTrackId: track.id,
-      coverFilename,
-      lyrics: [],
-      lrcMeta: { title: track.title, artist: track.artist },
-    });
+      if (!lrcData) {
+        // Fallback or default structure without lyrics
+        lrcData = {
+          lines: [],
+          meta: {
+            title: track.title,
+            artist: track.artist,
+            coverFilename,
+            libraryTrackId: track.id,
+            activeTrack: { ...track, coverFilename }
+          }
+        };
+      }
+      
+      toast.dismiss(toastId);
 
-    if (track.lyrics_key) {
-      fetch(`${SERVER_URL || ''}/library/${track.id}/lyrics`)
-        .then((res) => {
-          if (!res.ok) throw new Error('Failed to load lyrics');
-          return res.text();
-        })
-        .then((text) => {
-          const lrcData = parseLrc(text);
-          setLyrics(lrcData.lines);
-          const lyricsMeta = {
-            title: lrcData.meta.title || track.title,
-            artist: lrcData.meta.artist || track.artist,
-          };
-          setLrcMeta(lyricsMeta);
-          emitUpdateTrackMetadata({
-            lyrics: lrcData.lines,
-            lrcMeta: lyricsMeta,
-          });
-        })
-        .catch((err) => {
-          console.warn('Failed to load R2 lyrics:', err);
-        });
+      // 5. Feed into chunk-based MSE workflow
+      await handleAudioFile(file, lrcData);
+      
+      // 6. Automatically start playback
+      if (audioRef.current) {
+        audioRef.current.play().then(() => {
+          setIsPlaying(true);
+          emitPlay(0, 0);
+        }).catch(() => {});
+      }
+    } catch (err: any) {
+      toast.dismiss(toastId);
+      console.error('Failed to load R2 track into room:', err);
+      toast.error(`Failed to load track from R2: ${err.message}`);
     }
+  }, [handleAudioFile, toast, emitPlay]);
 
-    audioRef.current.play().then(() => {
-      setIsPlaying(true);
-      emitPlay(0, 0);
-    }).catch(() => {});
+  // const handleHostLibraryTrackList = useCallback((tracksToHost: any[], startIndex = 0) => {
+  //   if (tracksToHost.length === 0) return;
+  //   setQueue(tracksToHost);
+  //   setCurrentQueueIndex(startIndex);
+  //   playTrack(tracksToHost[startIndex]);
+  //   setActiveTab('player');
+  //   toast.success(`Hosting set of ${tracksToHost.length} songs`);
+  // }, [playTrack, toast]);
 
-    toast.success(`Playing "${track.title}" from R2 Library`);
-  }, [emitUpdateTrackMetadata, emitPlay, toast]);
+  // const handleAddToQueue = useCallback((track: any) => {
+  //   setQueue(prev => {
+  //     const alreadyIn = prev.some(t => t.id === track.id);
+  //     if (alreadyIn) {
+  //       toast.success(`"${track.title}" is already in queue`);
+  //       return prev;
+  //     }
+  //     toast.success(`Added "${track.title}" to queue`);
+  //     return [...prev, track];
+  //   });
+  // }, [toast]);
 
-  const handleHostLibraryTrackList = useCallback((tracksToHost: any[], startIndex = 0) => {
-    if (tracksToHost.length === 0) return;
-    setQueue(tracksToHost);
-    setCurrentQueueIndex(startIndex);
-    playTrack(tracksToHost[startIndex]);
-    setActiveTab('player');
-    toast.success(`Hosting set of ${tracksToHost.length} songs`);
-  }, [playTrack, toast]);
-
-  const handleAddToQueue = useCallback((track: any) => {
-    setQueue(prev => {
-      const alreadyIn = prev.some(t => t.id === track.id);
-      if (alreadyIn) {
-        toast.success(`"${track.title}" is already in queue`);
-        return prev;
-      }
-      toast.success(`Added "${track.title}" to queue`);
-      return [...prev, track];
-    });
-  }, [toast]);
-
-  const handleAddTracksToQueue = useCallback((newTracks: any[]) => {
-    setQueue(prev => {
-      const filtered = newTracks.filter(nt => !prev.some(pt => pt.id === nt.id));
-      if (filtered.length === 0) {
-        toast.success('All songs are already in the queue');
-        return prev;
-      }
-      toast.success(`Added ${filtered.length} songs to queue`);
-      return [...prev, ...filtered];
-    });
-  }, [toast]);
+  // const handleAddTracksToQueue = useCallback((newTracks: any[]) => {
+  //   setQueue(prev => {
+  //     const filtered = newTracks.filter(nt => !prev.some(pt => pt.id === nt.id));
+  //     if (filtered.length === 0) {
+  //       toast.success('All songs are already in the queue');
+  //       return prev;
+  //     }
+  //     toast.success(`Added ${filtered.length} songs to queue`);
+  //     return [...prev, ...filtered];
+  //   });
+  // }, [toast]);
 
   const handleRemoveFromQueue = useCallback((idx: number) => {
     setQueue(prev => prev.filter((_, i) => i !== idx));
@@ -1072,14 +1094,7 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
                     High-quality persistent audio tracks catalog. Stream or host direct synced playback rooms.
                   </p>
                 </div>
-                <LibraryBrowser
-                  isHost={true}
-                  onHostTrack={handleHostLibraryTrack}
-                  onHostTrackList={handleHostLibraryTrackList}
-                  onAddToQueue={handleAddToQueue}
-                  onAddTracksToQueue={handleAddTracksToQueue}
-                  activeTrackId={roomState.libraryTrackId}
-                />
+                <Library onLoadToRoom={handleR2TrackSelect} />
               </div>
             </div>
           ) : (
@@ -1395,14 +1410,7 @@ export function HostView({ roomId, displayName, onLeave, audioRef }: Props) {
                 Selecting a song plays it instantly for the room.
               </p>
             </div>
-            <LibraryBrowser
-              isHost={true}
-              onHostTrack={handleHostLibraryTrack}
-              onHostTrackList={handleHostLibraryTrackList}
-              onAddToQueue={handleAddToQueue}
-              onAddTracksToQueue={handleAddTracksToQueue}
-              activeTrackId={roomState.libraryTrackId}
-            />
+            <Library onLoadToRoom={handleR2TrackSelect} />
           </div>
         )}
       </div>

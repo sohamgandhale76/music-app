@@ -13,7 +13,7 @@ import { useToast } from '../hooks/useToast';
 import { SourceBufferManager, isMseSupported } from '../lib/mediaSource';
 import { toMseMimeType, CHUNK_DURATION } from '../lib/chunker';
 import { SERVER_URL } from '../lib/constants';
-import { LibraryBrowser } from './LibraryBrowser';
+import { Library } from './Library';
 import { Button } from './ui/Button';
 import { getServerTime } from '../lib/ntp';
 import { getSocket } from '../lib/socket';
@@ -619,10 +619,7 @@ export function ViewerView({ roomId, displayName, onLeave, audioRef }: Props) {
                     Browse the room playlist catalog or contribute to the library. Only the host can play songs.
                   </p>
                 </div>
-                <LibraryBrowser
-                  isHost={false}
-                  activeTrackId={roomState.libraryTrackId}
-                />
+                <Library />
               </div>
             </div>
           ) : (
@@ -870,10 +867,7 @@ export function ViewerView({ roomId, displayName, onLeave, audioRef }: Props) {
                 Browse the library or upload tracks. Only the host can play them.
               </p>
             </div>
-            <LibraryBrowser
-              isHost={false}
-              activeTrackId={roomState.libraryTrackId}
-            />
+            <Library />
           </div>
         )}
       </div>
